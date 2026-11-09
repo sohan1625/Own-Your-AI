@@ -14,20 +14,31 @@ from pathlib import Path
 import tomllib
 from typing import Any, Mapping, Sequence
 
-try:\n    from pypdf import PdfReader\nexcept ImportError:  # pragma: no cover\n    PdfReader = None  # type: ignore
+# Attempt to import the PDF parser. If it is unavailable we set a sentinel
+# value so that the rest of the module can be imported without error.
+try:
+    from pypdf import PdfReader
+except ImportError:  # pragma: no cover
+    PdfReader = None  # type: ignore
 
 
 def load_config(config_path: str | Path = "config.toml") -> dict[str, Any]:
-    """Load configuration from a TOML file."""
+    """Load configuration from a TOML file.
+
+    Raises ``FileNotFoundError`` if the file does not exist.
+    """
     cfg_file = Path(config_path)
-    if not cfg_file.exists():
+    if not cfg_file.is_file():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
     with open(cfg_file, "rb") as f:
         return tomllib.load(f)
 
 
 def get_data_dir_from_config(config_path: str | Path = "config.toml") -> Path:
-    """Read the data/documents directory path from config.toml."""
+    """Read the data/documents directory path from config.toml.
+
+    The config must contain a ``[paths]`` section with a ``data_dir`` entry.
+    """
     config = load_config(config_path)
     data_dir = config.get("paths", {}).get("data_dir")
     if not data_dir:
@@ -36,7 +47,8 @@ def get_data_dir_from_config(config_path: str | Path = "config.toml") -> Path:
 
 
 def compute_file_sha256(file_path: str | Path) -> str:
-    """Compute the SHA-256 hex digest of a file."""
+    """Compute the SHA‑256 hex digest of a file.
+    """
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -56,10 +68,10 @@ def parse_pdf_file(
 
     Args:
         file_path: Path to the PDF file.
-        file_hash: Optional precomputed SHA-256 hash of the file.
+        file_hash: Optional precomputed SHA‑256 hash of the file.
 
     Returns:
-        List of dicts with keys: file, page, text, file_hash.
+        List of dicts with keys: ``file``, ``page``, ``text``, ``file_hash``.
     """
     path = Path(file_path)
     if not path.is_file():
@@ -68,6 +80,8 @@ def parse_pdf_file(
     if file_hash is None:
         file_hash = compute_file_sha256(path)
 
+    if PdfReader is None:
+        raise ImportError("pypdf library is required to parse PDFs.")
     reader = PdfReader(str(path))
     records: list[dict[str, Any]] = []
 
@@ -92,17 +106,17 @@ def parse_folder(
     """Parse all PDF files in a folder into page records.
 
     Args:
-        folder_path: Path to the folder containing PDFs. If None, reads from config.toml.
-        config_path: Path to configuration file (used if folder_path is None).
-        known_hashes: Optional mapping of file path -> hash or collection of known hashes.
+        folder_path: Path to the folder containing PDFs. If ``None``, reads from ``config.toml``.
+        config_path: Path to configuration file (used if ``folder_path`` is ``None``).
+        known_hashes: Optional mapping of file path → hash or collection of known hashes.
                       Files whose computed hash matches will be skipped (per RAG_PIPELINE.md).
 
     Returns:
         List of records, each containing:
-        - file (str): path to the PDF file
-        - page (int): 1-indexed page number
-        - text (str): plain text content of the page
-        - file_hash (str): SHA-256 hash of the file
+        - ``file`` (str): path to the PDF file
+        - ``page`` (int): 1‑indexed page number
+        - ``text`` (str): plain text content of the page
+        - ``file_hash`` (str): SHA‑256 hash of the file
     """
     if folder_path is None:
         target_dir = get_data_dir_from_config(config_path)
@@ -114,7 +128,7 @@ def parse_folder(
     if not target_dir.is_dir():
         raise NotADirectoryError(f"Target path is not a directory: {target_dir}")
 
-    # Discover all PDF files recursively (case-insensitive extension match)
+    # Discover all PDF files recursively (case‑insensitive extension match)
     pdf_files = sorted(
         p for p in target_dir.rglob("*")
         if p.is_file() and p.suffix.lower() == ".pdf"
@@ -137,7 +151,6 @@ def parse_folder(
         records.extend(file_records)
 
     return records
-
 
 # Alias to match alternate naming conventions
 ingest_folder = parse_folder
