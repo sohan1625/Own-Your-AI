@@ -1,0 +1,2 @@
+{"id": "placeholder-001", "question": "PLACEHOLDER: What is the primary purpose of this assistant?", "answerable": true, "gold_passages": [{"file": "example_lecture_notes.pdf", "page": 1, "start_char": 0, "end_char": 120}], "reference_answer": "PLACEHOLDER: The assistant answers questions privately and offline over local documents with citations.", "notes": "PLACEHOLDER ONLY - Replace with real evaluation questions created from your personal notes."}
+
