@@ -8,7 +8,7 @@ A local, offline document Q&A assistant. Answers come only from the user's docum
 
 ## Hard rules
 
-1. **No network calls** in runtime code. Model downloads are only in the explicit download command.
+1. No outbound network calls in runtime code. The only permitted network traffic is HTTP to a localhost-only Ollama server (127.0.0.1 or localhost). Model downloads happen only in the explicit download command.
 2. **No telemetry or analytics.** Do not add any logging that sends data out.
 3. **Retrieval is custom.** Do not replace chunking, BM25, vector search, fusion, or citation logic with framework abstractions. Libraries are allowed for parsing and for calling the local model.
 4. **Answers use only retrieved context.** Never let the generator answer from its own knowledge.

@@ -23,3 +23,7 @@ rerank_keep = 5             # default: 5 (candidates kept for generation)
 # (Standard TOML v1.0 has no null keyword; left commented out / null until set on the eval set)
 # not_found_threshold = null
 
+
+[ollama]
+model = "mistral"
+host = "http://localhost:11434"
