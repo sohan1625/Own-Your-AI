@@ -10,6 +10,8 @@ when the answer cannot be derived from the context.
 from __future__ import annotations
 
 import json
+import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 import tomllib
@@ -65,6 +67,17 @@ def _build_prompt(question: str, chunks: List[Dict[str, Any]]) -> str:
     return f"{instruction}\n\nQuestion: {question}\n\nContext:\n{chunks_section}"
 
 
+def get_generation_top_k(config_path: str | Path = "config.toml") -> int:
+    """Read top_k from config.toml under [generation]."""
+    try:
+        cfg = _load_config(config_path)
+        gen_cfg = cfg.get("generation", {})
+        val = gen_cfg.get("top_k", gen_cfg.get("GENERATION_TOP_K", gen_cfg.get("generation_top_k", 1)))
+        return int(val)
+    except Exception:
+        return 1
+
+
 def generate_answer(question: str, chunks: List[Dict[str, Any]], *, config_path: str | Path = "config.toml") -> str:
     """Generate an answer for *question* using retrieved *chunks*.
 
@@ -75,7 +88,7 @@ def generate_answer(question: str, chunks: List[Dict[str, Any]], *, config_path:
     2. Validates that the host points to localhost; otherwise a ``ValueError`` is
        raised.
     3. Builds a prompt that tells the model to answer only from the provided
-       chunks and to cite chunk IDs, with a fallback "not found" response.
+       chunks (limited to top GENERATION_TOP_K chunks) and to cite chunk IDs, with a fallback "not found" response.
     4. Sends a POST request to ``<host>/api/generate`` using the standard library
        ``urllib.request`` and returns the generated answer text.
     """
@@ -87,14 +100,23 @@ def generate_answer(question: str, chunks: List[Dict[str, Any]], *, config_path:
         raise ValueError("Ollama model and host must be specified in config.toml or environment.")
     host = _validate_host(host)
 
-    prompt = _build_prompt(question, chunks)
-    payload = json.dumps({"model": model, "prompt": prompt}).encode("utf-8")
+    top_k = get_generation_top_k(config_path)
+    chunks_to_use = chunks[:top_k]
+
+    prompt = _build_prompt(question, chunks_to_use)
+    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
     request = urllib.request.Request(f"{host}/api/generate", data=payload, method="POST")
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request) as resp:
-        resp_data = resp.read()
-        resp_json = json.loads(resp_data)
-        # Ollama returns the generated text under the 'response' key.
-        return resp_json.get("response", "")
+    try:
+        with urllib.request.urlopen(request) as resp:
+            resp_data = resp.read()
+            resp_json = json.loads(resp_data)
+            # Ollama returns the generated text under the 'response' key.
+            return resp_json.get("response", "")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Ollama request failed with HTTP {exc.code}: {body}"
+        ) from exc
 
 # End of answer module

@@ -5,8 +5,8 @@
 data_dir = "data"           # directory for document ingestion (watched folder)
 
 [chunking]
-chunk_size = 400            # tokens (default: 400, tuned on EVAL.md)
-overlap = 50                # tokens (default: 50, tuned on EVAL.md)
+chunk_size = 400      # tokens (default: 400, tuned on EVAL.md)
+overlap = 50           # tokens (default: 50, tuned on EVAL.md)
 
 [retrieval]
 top_n_per_retriever = 20    # default: 20 (candidates each for BM25 and vector search)
@@ -22,6 +22,10 @@ rerank_keep = 5             # default: 5 (candidates kept for generation)
 # not_found_threshold: set on the eval set, not guessed.
 # (Standard TOML v1.0 has no null keyword; left commented out / null until set on the eval set)
 # not_found_threshold = null
+
+
+[generation]
+top_k = 1
 
 
 [ollama]

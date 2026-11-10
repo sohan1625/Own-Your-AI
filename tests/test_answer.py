@@ -57,7 +57,72 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertTrue(request.full_url.startswith('http://localhost'))
         payload = json.loads(request.data.decode('utf-8'))
         self.assertEqual(payload['model'], 'mistral')
-        self.assertEqual(payload['prompt'], self.expected_prompt)
+        from src.answer import get_generation_top_k
+        top_k = get_generation_top_k()
+        expected = _build_prompt(self.question, self.sample_chunks[:top_k])
+        self.assertEqual(payload['prompt'], expected)
+
+    @patch('urllib.request.urlopen')
+    def test_request_body_has_stream_false(self, mock_urlopen):
+        """The request body must include "stream": false so Ollama returns one JSON object."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "ok"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        generate_answer(self.question, self.sample_chunks)
+
+        args, _ = mock_urlopen.call_args
+        payload = json.loads(args[0].data.decode('utf-8'))
+        self.assertIn('stream', payload)
+        self.assertIs(payload['stream'], False)
+
+    @patch('urllib.request.urlopen')
+    def test_prompt_contains_top_k_chunks_from_config_when_given_20(self, mock_urlopen):
+        """When generate_answer is given 20 chunks, prompt should contain only top_k chunks from config."""
+        from src.answer import get_generation_top_k
+        top_k = get_generation_top_k()
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "ok"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        twenty_chunks = [{"chunk_id": f"c{i}", "text": f"Text chunk {i}"} for i in range(20)]
+        generate_answer(self.question, twenty_chunks)
+
+        args, _ = mock_urlopen.call_args
+        payload = json.loads(args[0].data.decode('utf-8'))
+        prompt = payload['prompt']
+        for i in range(top_k):
+            self.assertIn(f"Chunk c{i}: Text chunk {i}", prompt)
+        self.assertNotIn(f"Chunk c{top_k}: Text chunk {top_k}", prompt)
+        self.assertEqual(prompt.count("Chunk c"), top_k)
+
+    def test_zero_citation_rule_on_demo_helper(self):
+        """The demo helper returns 'not found in your documents' and answer_failed=True if zero valid citations."""
+        from scripts.demo import evaluate_citations_and_answer
+        from src.cite import CitationResult
+
+        # Case 1: Zero valid citations
+        res_zero = CitationResult(
+            answer="Model returned answer without citing anything.",
+            valid_citations=[],
+            dropped_citations=[],
+            has_invalid=False,
+        )
+        answer_text, answer_failed = evaluate_citations_and_answer(res_zero)
+        self.assertEqual(answer_text, "not found in your documents")
+        self.assertTrue(answer_failed)
+
+        # Case 2: At least one valid citation
+        res_valid = CitationResult(
+            answer="Model answer citing [c1].",
+            valid_citations=[{"id": "c1", "file": "doc.pdf", "page": 1, "start_char": 0, "end_char": 10}],
+            dropped_citations=[],
+            has_invalid=False,
+        )
+        answer_text, answer_failed = evaluate_citations_and_answer(res_valid)
+        self.assertEqual(answer_text, "Model answer citing [c1].")
+        self.assertFalse(answer_failed)
 
 if __name__ == '__main__':
     unittest.main()

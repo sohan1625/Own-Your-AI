@@ -15,10 +15,10 @@ Status key: [ ] todo, [~] in progress, [x] done
 
 ## M1: One answer with a citation
 
-- [ ] Parse one PDF folder into pages with text
-- [ ] Implement chunker with size and overlap, unit tests
-- [ ] Implement BM25 over chunks, unit tests
-- [ ] Build keyword-only query path
+- [x] Parse one PDF folder into pages with text
+- [x] Implement chunker with size and overlap, unit tests
+- [x] Implement BM25 over chunks, unit tests
+- [x] Build keyword-only query path
 - [ ] Generate an answer from top chunks with chunk IDs
 - [ ] Map chunk IDs to file, page, and span
 - [ ] Demo one question end to end
