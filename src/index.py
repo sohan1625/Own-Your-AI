@@ -1,27 +1,161 @@
 # src/index.py
-"""Keyword (BM25) indexing utilities.
+"""Indexing utilities: Keyword (BM25) and Vector (nomic-embed-text) embeddings.
 
-This module provides a lightweight pure‑Python implementation of BM25 suitable for the
-M1 milestone. It deliberately avoids external dependencies to keep the project offline‑
-first. The implementation follows the classic BM25 formula (Robertson & Jones, 2004)
-with the standard parameters k1=1.5 and b=0.75.
-
-The public API consists of:
-    * ``build_bm25_index(chunks)`` – builds an index from a list of chunk records.
-    * ``bm25_search(query, index, top_n=20)`` – returns the top‑N matching chunk
-      dictionaries sorted by BM25 score (descending).
-
-Chunk records are dictionaries with at least the keys ``file``, ``page``, ``text`` and
-``parent_id`` (as produced by ``src.chunk``). The function does **not** modify the
-input records.
+This module provides:
+1. Pure-Python BM25 keyword index over chunk records.
+2. Vector embeddings for chunks using local Ollama endpoint (/api/embed with nomic-embed-text).
 """
 
 from __future__ import annotations
 
+import json
 import math
+import os
+from pathlib import Path
 import re
+import tomllib
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Tuple
+import urllib.request
+
+
+# ---------------------------------------------------------------------------
+# Configuration & Host Validation helpers
+# ---------------------------------------------------------------------------
+
+def load_config(config_path: str | Path = "config.toml") -> dict[str, Any]:
+    """Load the TOML configuration file and return the full dictionary."""
+    cfg_file = Path(config_path)
+    if not cfg_file.is_file():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    with open(cfg_file, "rb") as f:
+        return tomllib.load(f)
+
+
+def _validate_host(host: str) -> str:
+    """Ensure the Ollama host points to localhost.
+
+    Acceptable forms are ``http://localhost`` (with optional port) or ``http://127.0.0.1``.
+    Returns the host string without trailing slash.
+    """
+    host = host.rstrip("/")
+    if host.startswith("http://localhost") or host.startswith("http://127.0.0.1"):
+        return host
+    raise ValueError("Ollama host must be localhost (127.0.0.1); outbound network calls are prohibited.")
+
+
+def apply_prefix(prefix: str, text: str) -> str:
+    """Apply prefix ensuring nomic-embed-text expected format (e.g. search_query: text)."""
+    if not prefix:
+        return text
+    if prefix.endswith(": "):
+        return f"{prefix}{text}"
+    if prefix.endswith(":"):
+        return f"{prefix} {text}"
+    if prefix.endswith(" "):
+        return f"{prefix}{text}"
+    return f"{prefix}: {text}"
+
+
+def get_embedding_prefix(kind: str = "document", config_path: str | Path = "config.toml") -> str:
+    """Read the prefix for embedding from config.toml."""
+    try:
+        cfg = load_config(config_path)
+        emb_cfg = cfg.get("embedding", {})
+        if kind in ("query", "search_query", "question"):
+            return emb_cfg.get(
+                "search_query_prefix",
+                emb_cfg.get("query_prefix", "search_query: "),
+            )
+        else:
+            return emb_cfg.get(
+                "search_document_prefix",
+                emb_cfg.get("document_prefix", "search_document: "),
+            )
+    except Exception:
+        return "search_query: " if kind in ("query", "search_query", "question") else "search_document: "
+
+
+# ---------------------------------------------------------------------------
+# Vector embedding utilities (local Ollama /api/embed)
+# ---------------------------------------------------------------------------
+
+def embed_text(
+    text: str,
+    *,
+    prefix: str = "",
+    config_path: str | Path = "config.toml",
+    host: str | None = None,
+    model: str | None = None,
+) -> List[float]:
+    """Call local Ollama /api/embed to compute an embedding vector for text.
+
+    Ensures the host is localhost (127.0.0.1); raises ValueError otherwise.
+    Applies the prefix if given.
+    """
+    try:
+        cfg = load_config(config_path)
+    except Exception:
+        cfg = {}
+
+    emb_cfg = cfg.get("embedding", {})
+    ollama_cfg = cfg.get("ollama", {})
+
+    target_model = model or emb_cfg.get("model") or "nomic-embed-text"
+    target_host = host or emb_cfg.get("host") or ollama_cfg.get("host") or "http://localhost:11434"
+
+    valid_host = _validate_host(target_host)
+
+    prefixed_text = apply_prefix(prefix, text)
+    payload = json.dumps({"model": target_model, "input": prefixed_text}).encode("utf-8")
+    req = urllib.request.Request(f"{valid_host}/api/embed", data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    with urllib.request.urlopen(req) as resp:
+        resp_data = resp.read()
+        resp_json = json.loads(resp_data)
+
+        # Ollama /api/embed returns "embeddings": [[...]]
+        embeddings = resp_json.get("embeddings")
+        if embeddings and len(embeddings) > 0:
+            return embeddings[0]
+        # Backwards compatibility if Ollama returns "embedding": [...]
+        if "embedding" in resp_json:
+            return resp_json["embedding"]
+        return []
+
+
+def build_chunk_embeddings(
+    chunks: List[Dict[str, Any]],
+    *,
+    config_path: str | Path = "config.toml",
+    host: str | None = None,
+    model: str | None = None,
+) -> List[List[float]]:
+    """Build embedding vectors for a list of chunks using Ollama /api/embed.
+
+    Reads model name, host, and document prefix from config.toml.
+    Returns vectors in memory as a list aligned with the input chunk list.
+    """
+    if not chunks:
+        return []
+    doc_prefix = get_embedding_prefix("document", config_path=config_path)
+    vectors: List[List[float]] = []
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        vec = embed_text(
+            text,
+            prefix=doc_prefix,
+            config_path=config_path,
+            host=host,
+            model=model,
+        )
+        vectors.append(vec)
+    return vectors
+
+
+# Alias
+build_vector_index = build_chunk_embeddings
 
 # ---------------------------------------------------------------------------
 # Helper functions

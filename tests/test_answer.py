@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 import os
 import json
 
-from src.answer import generate_answer, _build_prompt, _validate_host
+from src.answer import generate_answer, _build_prompt, _validate_host, normalize_answer
 
 class TestAnswerGeneration(unittest.TestCase):
     def setUp(self):
@@ -17,8 +17,12 @@ class TestAnswerGeneration(unittest.TestCase):
         ]
         self.question = "What is the answer?"
         self.expected_prompt = (
-            "Answer the question using ONLY the provided chunks. Cite each claim with the chunk ID. "
-            "If the chunks do not contain the answer, reply exactly 'not found in your documents'."
+            "Answer the question using ONLY the provided chunks. "
+            "Write a complete sentence that answers the question. "
+            "End every sentence that uses information from a chunk with that chunk's ID "
+            "in square brackets, like [chunk-id]. "
+            "If the chunks do not contain the answer, reply exactly "
+            "'not found in your documents'."
             "\n\nQuestion: What is the answer?\n\nContext:\n"
             "Chunk c1: First chunk text.\nChunk c2: Second chunk text."
         )
@@ -34,6 +38,14 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertIn("Chunk c2: Second chunk text.", prompt)
         self.assertIn("Answer the question using ONLY the provided chunks", prompt)
         self.assertIn("not found in your documents", prompt)
+
+    def test_prompt_contains_square_bracket_citation_and_no_labels(self):
+        """The prompt must use square-bracket citations."""
+        prompt = _build_prompt(self.question, self.sample_chunks)
+        # Must instruct square-bracket citation style
+        self.assertIn("[chunk-id]", prompt)
+        # Must not instruct parentheses for citations
+        self.assertNotIn("(chunk-id)", prompt)
 
     def test_validate_host_allows_localhost(self):
         self.assertEqual(_validate_host('http://localhost:11434'), 'http://localhost:11434')
@@ -127,3 +139,49 @@ class TestAnswerGeneration(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
+
+class TestNormalizeAnswer(unittest.TestCase):
+    """Unit tests for normalize_answer."""
+
+    UUID = "a6cc4097-9e64-4b1b-9d9d-ba6257e4ec9e"
+
+    def test_parenthesised_id_becomes_bracketed(self):
+        """(uuid) in the raw text must be rewritten as [uuid]."""
+        raw = f"The JVM executes bytecode. ({self.UUID})"
+        result = normalize_answer(raw, [self.UUID])
+        self.assertIn(f"[{self.UUID}]", result)
+        self.assertNotIn(f"({self.UUID})", result)
+
+    def test_trailing_question_block_is_cut(self):
+        """A trailing 'Question: ...' line and everything after it must be removed."""
+        raw = (
+            f"The JVM is a virtual machine. [{self.UUID}]\n"
+            "Question: What is the JVM?\n"
+            "Answer: not found in your documents"
+        )
+        result = normalize_answer(raw, [self.UUID])
+        self.assertIn(f"[{self.UUID}]", result)
+        self.assertNotIn("Question:", result)
+        self.assertNotIn("Answer:", result)
+
+    def test_trailing_answer_block_is_cut(self):
+        """A trailing 'Answer: ...' line must also be cut off."""
+        raw = (
+            f"The JVM loads class files. [{self.UUID}]\n"
+            "Answer: not found in your documents"
+        )
+        result = normalize_answer(raw, [self.UUID])
+        self.assertIn(f"[{self.UUID}]", result)
+        self.assertNotIn("Answer:", result)
+
+    def test_already_bracketed_id_is_unchanged(self):
+        """An answer that already uses [uuid] must not be double-bracketed."""
+        raw = f"The JVM executes bytecode. [{self.UUID}]"
+        result = normalize_answer(raw, [self.UUID])
+        self.assertEqual(result, raw.strip())
+        # Must not produce [[uuid]] or [[[uuid]]]
+        self.assertNotIn(f"[[{self.UUID}]]", result)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -11,6 +11,7 @@ Saves detailed output to eval/results_keyword.json and prints summary metrics.
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 from pathlib import Path
 import sys
@@ -23,8 +24,13 @@ if str(project_root) not in sys.path:
 
 from src.ingest import parse_folder
 from src.chunk import chunk_page_records
-from src.index import build_bm25_index
-from src.retrieve import keyword_retrieve
+from src.index import build_bm25_index, build_chunk_embeddings
+from src.retrieve import (
+    keyword_retrieve,
+    vector_retrieve,
+    get_retrieval_params,
+    load_config,
+)
 from src.answer import generate_answer, get_generation_top_k
 from src.cite import resolve_citations
 from scripts.demo import evaluate_citations_and_answer
@@ -67,21 +73,88 @@ def evaluate_retrieval_match(
     return None
 
 
+def get_rrf_k(config_path: str | Path = "config.toml") -> int:
+    """Read the RRF constant k from config.toml [fusion] section."""
+    try:
+        cfg = load_config(config_path)
+        fusion_cfg = cfg.get("fusion", {})
+        k = int(fusion_cfg.get("rrf_k", 60))
+        if k <= 0:
+            raise ValueError("rrf_k must be a positive integer")
+        return k
+    except Exception:
+        return 60
+
+
+def reciprocal_rank_fusion(
+    ranked_lists: List[List[Dict[str, Any]]],
+    k: int = 60,
+    top_n: int = 20,
+) -> List[Dict[str, Any]]:
+    """Fuse multiple ranked lists of chunk dictionaries using Reciprocal Rank Fusion (RRF).
+
+    Formula: RRF_score(d) = sum_{list} 1 / (k + rank_list(d))
+    where rank_list(d) is the 1-based rank of chunk d in that list.
+    """
+    scores: Dict[Any, float] = defaultdict(float)
+    chunk_map: Dict[Any, Dict[str, Any]] = {}
+
+    for r_list in ranked_lists:
+        for rank, chunk in enumerate(r_list, start=1):
+            key = chunk.get("chunk_id")
+            if not key:
+                key = (
+                    Path(chunk.get("file", "")).name.lower(),
+                    int(chunk.get("page", -1)),
+                    int(chunk.get("start_char", 0)),
+                )
+            scores[key] += 1.0 / (k + rank)
+            if key not in chunk_map:
+                chunk_map[key] = chunk
+
+    # Sort chunks descending by RRF score; stable sort preserves initial order on tie
+    sorted_keys = sorted(chunk_map.keys(), key=lambda k_val: scores[k_val], reverse=True)
+    return [chunk_map[k_val] for k_val in sorted_keys[:top_n]]
+
+
 def run_evaluation(
     questions_path: str | Path = "eval/questions.jsonl",
-    output_path: str | Path = "eval/results_keyword.json",
+    output_path: Optional[str | Path] = None,
     with_answers: bool = False,
     config_path: str | Path = "config.toml",
     bm25_index: Optional[Dict[str, Any]] = None,
+    retriever: str = "keyword",
+    chunks: Optional[List[Dict[str, Any]]] = None,
+    vectors: Optional[List[List[float]]] = None,
 ) -> Dict[str, Any]:
     """Run the evaluation harness over questions and return the results dictionary."""
+    if retriever not in ("keyword", "vector", "hybrid"):
+        raise ValueError(f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', or 'hybrid'.")
+
+    if output_path is None:
+        output_path = f"eval/results_{retriever}.json"
+
     questions = load_questions(questions_path)
 
-    # Ingest and index once if index not supplied
-    if bm25_index is None:
-        records = parse_folder(config_path=config_path)
-        chunks = chunk_page_records(records, config_path=config_path)
+    # Ingest and chunk once if chunks not supplied
+    if chunks is None:
+        if bm25_index is not None and "chunks" in bm25_index:
+            chunks = bm25_index["chunks"]
+        else:
+            records = parse_folder(config_path=config_path)
+            chunks = chunk_page_records(records, config_path=config_path)
+
+    # BM25 index built once if needed
+    if bm25_index is None and retriever in ("keyword", "hybrid"):
         bm25_index = build_bm25_index(chunks)
+
+    # Embed chunks once and cache in memory if needed
+    if vectors is None and retriever in ("vector", "hybrid"):
+        vectors = build_chunk_embeddings(chunks, config_path=config_path)
+
+    rrf_k = get_rrf_k(config_path)
+    retrieval_params = get_retrieval_params(config_path)
+    top_n = retrieval_params["top_n"]
 
     eval_results: List[Dict[str, Any]] = []
     answerable_count = 0
@@ -98,9 +171,19 @@ def run_evaluation(
         answerable = bool(q.get("answerable", True))
         gold_passages = q.get("gold_passages", [])
 
-        # Retrieval: top 20 chunks
-        retrieved_raw = keyword_retrieve(q_text, bm25_index, config_path=config_path)
-        retrieved = [] if isinstance(retrieved_raw, str) else retrieved_raw
+        # Retrieval based on selected retriever strategy
+        if retriever == "keyword":
+            retrieved_raw = keyword_retrieve(q_text, bm25_index, config_path=config_path)
+            retrieved = [] if isinstance(retrieved_raw, str) else retrieved_raw
+        elif retriever == "vector":
+            scored_chunks = vector_retrieve(q_text, chunks, vectors, top_n=top_n, config_path=config_path)
+            retrieved = [chunk for chunk, _ in scored_chunks]
+        elif retriever == "hybrid":
+            bm25_raw = keyword_retrieve(q_text, bm25_index, config_path=config_path)
+            bm25_chunks = [] if isinstance(bm25_raw, str) else bm25_raw
+            vector_results = vector_retrieve(q_text, chunks, vectors, top_n=top_n, config_path=config_path)
+            vector_chunks = [chunk for chunk, _ in vector_results]
+            retrieved = reciprocal_rank_fusion([bm25_chunks, vector_chunks], k=rrf_k, top_n=top_n)
 
         first_gold_rank = evaluate_retrieval_match(retrieved, gold_passages)
 
@@ -180,7 +263,7 @@ def run_evaluation(
     }
 
     full_output = {
-        "mode": "keyword",
+        "mode": retriever,
         "with_answers": with_answers,
         "summary": summary,
         "questions": eval_results,
@@ -198,6 +281,7 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
     """Print a formatted results table and summary metrics."""
     questions = eval_data["questions"]
     summary = eval_data["summary"]
+    mode_name = eval_data.get("mode", "keyword").capitalize()
 
     print("\n" + "=" * 50)
     print(f"{'ID':<6} | {'Answerable':<10} | {'Gold Rank':<10} | {'Status':<6}")
@@ -208,7 +292,7 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
         print(f"{q['id']:<6} | {ans_str:<10} | {rank_str:<10} | {q['status']:<6}")
     print("=" * 50)
 
-    print("\nSummary Metrics (Keyword Retrieval Top-20):")
+    print(f"\nSummary Metrics ({mode_name} Retrieval Top-20):")
     print(f"  Total Questions:        {summary['total_questions']}")
     print(f"  Answerable Questions:   {summary['answerable_questions']}")
     print(f"  Unanswerable Questions: {summary['unanswerable_questions']}")
@@ -226,6 +310,12 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run evaluation on questions.jsonl.")
     parser.add_argument(
+        "--retriever",
+        choices=["keyword", "vector", "hybrid"],
+        default="keyword",
+        help="Retrieval strategy: keyword (default), vector, or hybrid.",
+    )
+    parser.add_argument(
         "--with-answers",
         action="store_true",
         help="Also generate answers via Ollama and measure hallucination on unanswerables.",
@@ -237,8 +327,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--output",
-        default="eval/results_keyword.json",
-        help="Path to output results JSON file.",
+        default=None,
+        help="Path to output results JSON file (default: eval/results_<retriever>.json).",
     )
     parser.add_argument(
         "--config",
@@ -252,6 +342,7 @@ def main() -> None:
         output_path=args.output,
         with_answers=args.with_answers,
         config_path=args.config,
+        retriever=args.retriever,
     )
     print_results_table(results)
 

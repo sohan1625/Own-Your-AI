@@ -24,6 +24,13 @@ rerank_keep = 5             # default: 5 (candidates kept for generation)
 # not_found_threshold = null
 
 
+[embedding]
+model = "nomic-embed-text"
+host = "http://localhost:11434"
+search_query_prefix = "search_query: "
+search_document_prefix = "search_document: "
+
+
 [generation]
 top_k = 1
 
