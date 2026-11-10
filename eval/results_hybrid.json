@@ -9,7 +9,7 @@
     "recall_at_3": 0.9667,
     "recall_at_5": 1.0,
     "mrr": 0.8028,
-    "hallucination_rate": 0.5
+    "hallucination_rate": 0.2
   },
   "questions": [
     {
@@ -22,7 +22,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The original name of Java was Oak, and it was renamed in 1995 because Oak was already a registered trademark, and the team decided to use the name Java, after Java coffee. [f16afc2c-7d7d-4672-adaf-ca6a2ddbf363]",
+      "generated_answer": "The original name of Java was Oak, but it was renamed Java in 1995 because Oak was already a registered trademark. Java was originally named Oak after an oak tree outside James Gosling's office. [99efa847-981d-4902-a48b-18efa0f29a08]",
       "hallucinated": null
     },
     {
@@ -35,7 +35,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "Java was announced publicly in the year 1995 [f16afc2c-7d7d-4672-adaf-ca6a2ddbf363], and its slogan was WORA - Write Once, Run Anywhere [f16afc2c-7d7d-4672-adaf-ca6a2ddbf363].",
+      "generated_answer": "Java was announced publicly in 1995 [99efa847-981d-4902-a48b-18efa0f29a08], and the slogan was WORA - Write Once, Run Anywhere.",
       "hallucinated": null
     },
     {
@@ -48,7 +48,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "Oracle Corporation acquired Sun Microsystems in 2010 [f16afc2c-7d7d-4672-adaf-ca6a2ddbf363].",
+      "generated_answer": "not found in your documents",
       "hallucinated": null
     },
     {
@@ -61,7 +61,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The JVM, as stated in [2b1ba1c5-7a9d-460c-b28f-fafcbc079b25], is a Java Virtual Machine that runs bytecode, which is a platform-specific component.",
+      "generated_answer": "The JVM, or Java Virtual Machine, is a platform-specific software that runs bytecode, which is the machine-independent code generated from Java source code. [4cff882e-de30-4c12-97a0-09af84572040]",
       "hallucinated": null
     },
     {
@@ -74,7 +74,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The difference between JDK, JRE, and JVM is that JVM (Java Virtual Machine) runs bytecode and is platform-specific. JRE (Java Runtime Environment) is JVM combined with the core libraries needed to run programs. JDK (Java Development Kit) is JRE plus development tools needed to develop programs. In other words, JDK equals JRE plus development tools, JRE equals JVM plus class libraries. [2b1ba1c5-7a9d-460c-b28f-fafcbc079b25]",
+      "generated_answer": "The difference between JDK, JRE, and JVM is that JVM (Java Virtual Machine) runs bytecode, which is platform-specific. JRE (Java Runtime Environment) consists of JVM and the core libraries needed to run programs, and is also platform-specific. JDK (Java Development Kit) includes JRE and development tools (such as javac, jar, javadoc, jdb) needed to develop programs. JDK equals JRE plus development tools, and JRE equals JVM plus class libraries. [4cff882e-de30-4c12-97a0-09af84572040]",
       "hallucinated": null
     },
     {
@@ -87,7 +87,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The JVM architecture consists of three main parts: the Class Loader Subsystem, the Runtime Data Areas (memory), and the Execution Engine. [2b1ba1c5-7a9d-460c-b28f-fafcbc079b25]",
+      "generated_answer": "The three main parts of JVM architecture are the Class Loader Subsystem, the Runtime Data Areas (memory), and the Execution Engine. [4cff882e-de30-4c12-97a0-09af84572040]",
       "hallucinated": null
     },
     {
@@ -100,7 +100,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "Java Enterprise Edition (JEE) is used for large web and enterprise applications, as mentioned in the chunk [2b1ba1c5-7a9d-460c-b28f-fafcbc079b25]. Specifically, it's used for developing Servlets, JSP, EJB, and JPA applications.",
+      "generated_answer": "Java Enterprise Edition (JEE, now Jakarta EE) is used for large web and enterprise applications, such as those that use Servlets, JSP, EJB, and JPA. [4cff882e-de30-4c12-97a0-09af84572040]",
       "hallucinated": null
     },
     {
@@ -113,7 +113,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The three phases of class loading are Loading, Linking, and Initialization [3986fe32-de71-48bb-a05c-78ca178725ed].",
+      "generated_answer": "The three phases of class loading are Loading, Linking, and Initialization.\n\n1. Loading: reads the bytecode and creates a Class object.\n2. Linking: involves verification, preparation, and resolution.\n3. Initialization: static variables get their real values and static blocks run. [452cf2c1-5765-4fbf-8280-d19fbc46c135]",
       "hallucinated": null
     },
     {
@@ -126,7 +126,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The difference between the public and private access modifiers is that public ([chunk-[377ad9c2-16d9-4f77-81d3-739f903f57fb]) is accessible from anywhere, while private ([chunk-[377ad9c2-16d9-4f77-81d3-739f903f57fb]) is accessible only inside the same class.",
+      "generated_answer": "The difference between the public and private access modifiers is that public access can be accessed from anywhere, while private access can only be accessed within the same class. Public access is used for encapsulation, allowing for better control of data access, while private access is used for hiding data and is not visible even to subclasses. [cb04daba-8799-408f-af56-fb566663af96]",
       "hallucinated": null
     },
     {
@@ -139,7 +139,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "Checked exceptions, such as IOException, SQLException, and FileNotFoundException, are exceptions that the compiler requires you to either handle with a try-catch block or declare with the throws keyword. In contrast, unchecked exceptions, such as NullPointerException, ArithmeticException, or ArrayIndexOutOfBoundsException, are not checked at compile time and are typically caused by programming mistakes. While errors, such as OutOfMemoryError or StackOverflowError, are serious problems that cannot be handled and usually indicate a problem with the JVM or environment, exceptions can mostly be handled, but unchecked exceptions are usually not caught. [af5c3716-9419-4472-817a-0b03bf703197]",
+      "generated_answer": "Checked exceptions are exceptions that are checked by the compiler, and you must either handle them with a try-catch block or declare them using the 'throws' keyword, while unchecked exceptions are subclasses of RuntimeException (and Error) and are not checked at compile time, usually caused by programming mistakes. [f68470fe-d3ef-488c-a0f8-fb5679662c4f]",
       "hallucinated": null
     },
     {
@@ -152,7 +152,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The role of the 'finally' block is not explicitly mentioned in the provided context. [1307f71c-2802-44da-b5b0-63ed654a15f5]",
+      "generated_answer": "not found in your documents",
       "hallucinated": null
     },
     {
@@ -165,7 +165,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.3333333333333333,
       "status": "PASS",
-      "generated_answer": "The 'throws' keyword in Java is used to declare that a method may throw an exception to the caller. [chunk-id: [d80c76ed-85f0-4c43-8213-3cb09b7731e3][chunk-id: 89f9a67d-f0b2-482d-9745-235f2b06e41e]",
+      "generated_answer": "The 'throws' keyword in Java is used in a method signature to declare that the method may pass checked exceptions to its caller. It can list several exceptions, separated by commas. For example, a method `readFile()` may be declared as `void readFile() throws IOException, FileNotFoundException`. [5a76c667-3480-449b-af61-4585173529a2]",
       "hallucinated": null
     },
     {
@@ -178,7 +178,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "Encapsulation is used for hiding data and exposing it through getters and setters, which is mentioned as a use for the 'private' access modifier in the provided context. [377ad9c2-16d9-4f77-81d3-739f903f57fb]",
+      "generated_answer": "not found in your documents",
       "hallucinated": null
     },
     {
@@ -191,7 +191,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.25,
       "status": "PASS",
-      "generated_answer": "Instance methods are methods that work on object data and need an object to be called [55b19905-6a27-4ec4-962b-d5cd80ec10f3]. On the other hand, static methods belong to the class and cannot use 'this' or access instance members directly [55b19905-6a27-4ec4-962b-d5cd80ec10f3].",
+      "generated_answer": "An instance method works on object data and needs an object to be called, while a static method belongs to the class and cannot use this or access instance members directly. [0c8b590d-6e77-4fd7-a5db-445dddc27883]",
       "hallucinated": null
     },
     {
@@ -204,7 +204,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The String class in Java is immutable because its content cannot be changed once a String object is created. This is a security measure, as it is used for passwords, URLs, file paths, and class names. Additionally, it allows for the string pool, a special area in the heap where string literals are stored and reused, improving efficiency. [52135b38-d57a-47b4-8d16-82c8e0703d41]",
+      "generated_answer": "The String class is immutable because it is designed with security, pooling, thread safety, and hash caching in mind. [3a6ef8e7-50c2-45d7-9e54-68da163c42b4]",
       "hallucinated": null
     },
     {
@@ -217,7 +217,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The difference between String, StringBuilder, and StringBuffer is outlined in the table provided, but it is not explicitly stated in the chunks. However, it can be inferred that String is immutable and uses a pool for efficiency, StringBuilder is mutable and uses the heap for storing characters, and StringBuffer is similar to StringBuilder but synchronizes methods for thread safety. [3f8e3bdd-4625-4cd7-bd90-5a00f3a4ecaf]",
+      "generated_answer": "The difference between String, StringBuilder, and StringBuffer is that String is immutable and thread-safe, but slower for many changes, while StringBuilder and StringBuffer are mutable, not thread-safe by default, and StringBuilder is faster for many changes compared to StringBuffer, which is slower but provides synchronization. [43d07d67-1eed-490f-9690-5e73e34912bd]",
       "hallucinated": null
     },
     {
@@ -230,7 +230,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The `String.intern()` method in Java returns the canonical representation for the string. It is a shared instance of the string, which means if a string is already in the string pool, `String.intern()` will return a reference to that instance, otherwise it will add the string to the string pool and return a reference to the new instance. [52135b38-d57a-47b4-8d16-82c8e0703d41]",
+      "generated_answer": "The method `String.intern()` returns the canonical (unique) pool reference of the string. [3a6ef8e7-50c2-45d7-9e54-68da163c42b4]",
       "hallucinated": null
     },
     {
@@ -243,7 +243,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The difference between a byte stream and a character stream is that a byte stream, such as FileInputStream and FileOutputStream, works with 8-bit data and any file type, while a character stream, like FileReader and FileWriter, works with 16-bit Unicode and primarily with text files. InputStreamReader and OutputStreamWriter are bridges from byte streams to character streams. [30c545fa-6329-48a9-becc-423b2de5ea53]",
+      "generated_answer": "A byte stream handles raw binary data (8 bits), while a character stream handles text (16-bit Unicode characters). Byte streams are best for handling files containing images, audio, or any file, and they use classes like InputStream and OutputStream. Character streams, on the other hand, are best for text files because they handle character encoding, and they use classes like Reader and Writer. [869a101d-ed8a-4942-a02b-877812be563a]",
       "hallucinated": null
     },
     {
@@ -256,7 +256,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The difference between List and Set is that List is an ordered collection that allows duplicates, while Set is an unordered collection that does not allow duplicates. [18d098c5-9bd6-4586-8111-f7a4d1aec088]",
+      "generated_answer": "The difference between List and Set is that List is an ordered collection that allows duplicates, while Set is an unordered collection that does not allow duplicates. [e9620873-6e17-42ec-adda-f407a9e00a4c]",
       "hallucinated": null
     },
     {
@@ -269,7 +269,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "A HashMap stores key-value pairs, with keys being unique and values potentially repeating. It does this in a hash table, and it allows one null key and many null values, but it's not synchronized. The average operation time for add/search is O(1). [466d881e-4f4f-4c78-af9b-510b918ad1a7]",
+      "generated_answer": "A HashMap stores key-value pairs in a hash table, with no specific order, allowing one null key and many null values. It is not synchronized and has an average O(1) add/search speed. [e2238201-aed9-4f83-b25a-ef85274e4b74]",
       "hallucinated": null
     },
     {
@@ -282,7 +282,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The difference between Comparable and Comparator is that Comparable is implemented inside the class and defines a single natural order using the method compareTo(), while Comparator is implemented outside the class and allows for multiple sort orders using the method compare(). Comparable defines the natural order of the class, whereas Comparator allows for custom orders. [291a3a9c-d6ba-4b60-8f5e-bcb5a4a76e82]",
+      "generated_answer": "Comparable and Comparator are both used to define how objects are sorted, but they differ in a few key aspects. Comparable is implemented inside a class, with one sort order and a method called `compareTo()`. On the other hand, Comparator is implemented outside the class, allowing for multiple sort orders and a method called `compare()`. Comparable is part of the java.lang package, while Comparator is part of the java.util package. [cc57f1cd-50f4-4853-b1a7-62e10c37a0cc]",
       "hallucinated": null
     },
     {
@@ -295,7 +295,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "Not found in your documents regarding 'fail-fast iteration'. The context provided does not contain any information about fail-fast iteration. [291a3a9c-d6ba-4b60-8f5e-bcb5a4a76e82]",
+      "generated_answer": "Fail-fast iteration refers to an approach where a ConcurrentModificationException is thrown if a collection is modified during iteration. This is best effort, not a guarantee, and it is used in ArrayList, HashMap, HashSet, and Vector. [cc57f1cd-50f4-4853-b1a7-62e10c37a0cc]",
       "hallucinated": null
     },
     {
@@ -308,7 +308,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The states of a thread are NEW, RUNNABLE, and BLOCKED, as described in the provided chunk: Thread lifecycle States (enum Thread.State): 1. NEW: thread created but start() not called. 2. RUNNABLE: ready to run or running (waiting for CPU from the scheduler). 3. BLOCKED: waiting to acquire a monitor lock to enter a synchronized block. [39f3e982-2740-4a6d-8560-299dfaa475a1]",
+      "generated_answer": "The states of a thread are NEW, RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, and TERMINATED, as defined by the enum Thread.State. [498cd262-6940-4e34-af97-b3fd491951b0]",
       "hallucinated": null
     },
     {
@@ -321,7 +321,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "A deadlock is a situation where two or more threads wait for each other's locks forever, so none can proceed [Four conditions (Coffman)]. The four conditions are mutual exclusion, hold and wait, no preemption, and circular wait. [588e6735-a8ee-4db3-855d-ae8d4e13b67d]",
+      "generated_answer": "A deadlock is a situation where two or more threads wait for each other's locks forever, so none can proceed. The four conditions for a deadlock are mutual exclusion, hold and wait, no preemption, and circular wait. [c730676e-4302-4a4a-a480-8978a9af9071]",
       "hallucinated": null
     },
     {
@@ -334,7 +334,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "A daemon thread is a background thread that runs alongside user-created threads and helps perform long-running tasks, but it does not prevent the JVM from exiting if there are no more user-created threads left. [0ca624f6-bc77-433e-8b4b-cf4ea5b053c3]",
+      "generated_answer": "A daemon thread is a low-priority background thread that provides services to user threads, such as the garbage collector, and the JVM exits when only daemon threads remain. [a1f23d93-d650-4ff2-8753-f24427e41086]",
       "hallucinated": null
     },
     {
@@ -347,7 +347,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "A lambda expression is a short way to write an anonymous function that implements a functional interface without boilerplate [968128fd-b7f4-4d34-b91e-70af9e3335de].",
+      "generated_answer": "A lambda expression is a short way to write an anonymous function that implements a functional interface without boilerplate, as seen in the example: `(parameters) -> expression or (parameters) -> { statements; }`. [8737f2c7-763c-4db5-bbd3-96cd9901339a]",
       "hallucinated": null
     },
     {
@@ -360,7 +360,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "The Stream API is used for processing sequences of elements, such as lists, arrays, and collections, supporting functional-style operations without modifying the source data. It uses a pipeline approach with intermediate and terminal operations. [Stream API] [44318bd4-0763-4eac-94dc-b303c59d9cea]",
+      "generated_answer": "The Stream API is used for handling sequences of elements and supports functional-style operations without storing data or modifying the source. It consists of a pipeline with a source, intermediate operations, and a terminal operation. [3782fe82-0272-4d40-b773-6fdfcaa8e1b2]",
       "hallucinated": null
     },
     {
@@ -373,7 +373,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 1.0,
       "status": "PASS",
-      "generated_answer": "JDBC stands for Java Database Connectivity, which is an API (java.sql) that lets Java programs connect to relational databases, run SQL, and process results in a database-independent way. [8ec53cca-e120-40dd-97fe-776335b4b83a]",
+      "generated_answer": "JDBC (Java Database Connectivity) is an API that lets Java programs connect to relational databases, run SQL, and process results in a database-independent way. [aab0a125-8752-4ced-b28e-466cfee0ceb0]",
       "hallucinated": null
     },
     {
@@ -386,7 +386,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "The difference between Statement and PreparedStatement is that Statement is slower for repeated use but safer against SQL injection risk, while PreparedStatement is faster, but it has a higher risk of SQL injection if not used carefully. [ef5e21ae-f127-4d88-8e0e-5ffc96fb7687]",
+      "generated_answer": "Statement and PreparedStatement differ in their approach to SQL execution and security. Statement runs static SQL, with the query being compiled every time, making it vulnerable to SQL injection when user input is concatenated [434e48c5-b213-43c4-a1d5-63bd470c8be3]. On the other hand, PreparedStatement uses a precompiled SQL with placeholders, making it faster for repeated queries and preventing SQL injection since values are bound as data, not as SQL text [b069bc3b-e7b3-4c22-aae5-be53ebe852d4].",
       "hallucinated": null
     },
     {
@@ -399,7 +399,7 @@
       "hit_at_5": true,
       "reciprocal_rank": 0.5,
       "status": "PASS",
-      "generated_answer": "A ResultSet is a set of data returned by executing a SELECT query, as mentioned in the context [executeQuery()]: SELECT, returns ResultSet. [228c2b49-d1e1-4b36-b2b1-7ef8cd3c6c2d]",
+      "generated_answer": "not found in your documents",
       "hallucinated": null
     },
     {
@@ -411,9 +411,9 @@
       "hit_at_3": false,
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
-      "status": "FAIL",
-      "generated_answer": "Spring Boot dependency injection works by using annotation-based configuration to manage the lifecycle of objects and their dependencies. The container automatically creates, configures, and manages instances of objects, and injects the dependencies through constructors, setter methods, or interface implementations. For example, in the provided context, the CallableStatement object is created and configured by the container when needed. [ef5e21ae-f127-4d88-8e0e-5ffc96fb7687]",
-      "hallucinated": true
+      "status": "PASS",
+      "generated_answer": "not found in your documents",
+      "hallucinated": false
     },
     {
       "id": "q32",
@@ -424,9 +424,9 @@
       "hit_at_3": false,
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
-      "status": "PASS",
-      "generated_answer": "Not found in your documents. The provided context does not contain information about deploying a Java app to Kubernetes. [88f747f0-c1ff-40f9-8c99-4ce22dad4a9f]",
-      "hallucinated": false
+      "status": "FAIL",
+      "generated_answer": "Deploying a Java app to Kubernetes can be achieved by creating a Docker image of your application, packaging it along with the required dependencies, and then deploying the Docker image to Kubernetes using a tool like Kubernetes' official kubectl command-line interface or tools like Jenkins, Helm, or Docker Compose. [d8f6ac53-e8b6-454f-b5de-b0720332d4ba] [aab0a125-8752-4ced-b28e-466cfee0ceb0] [4cff882e-de30-4c12-97a0-09af84572040]",
+      "hallucinated": true
     },
     {
       "id": "q33",
@@ -437,9 +437,9 @@
       "hit_at_3": false,
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
-      "status": "FAIL",
-      "generated_answer": "Kotlin coroutines are not explicitly mentioned in the provided context. [a76d41f6-570c-4769-8572-0d8bbe0e1324]",
-      "hallucinated": true
+      "status": "PASS",
+      "generated_answer": "not found in your documents",
+      "hallucinated": false
     },
     {
       "id": "q34",
@@ -451,7 +451,7 @@
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
       "status": "PASS",
-      "generated_answer": "Not found in your documents. The provided context does not contain information about how the G1 garbage collector tunes pause times. [588e6735-a8ee-4db3-855d-ae8d4e13b67d]",
+      "generated_answer": "not found in your documents",
       "hallucinated": false
     },
     {
@@ -464,7 +464,7 @@
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
       "status": "PASS",
-      "generated_answer": "Not found in your documents (regarding Python 3.12 features). [196f7cf5-6743-4477-859a-fcc48397cbb8]",
+      "generated_answer": "not found in your documents",
       "hallucinated": false
     },
     {
@@ -477,7 +477,7 @@
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
       "status": "PASS",
-      "generated_answer": "Not found in your documents (regarding the question about the capital of France). The provided context is about Java programming. [2b1ba1c5-7a9d-460c-b28f-fafcbc079b25]",
+      "generated_answer": "not found in your documents",
       "hallucinated": false
     },
     {
@@ -490,7 +490,7 @@
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
       "status": "FAIL",
-      "generated_answer": "The process of setting up PostgreSQL replication involves using a PreparedStatement, which is a precompiled SQL with ? placeholders for faster queries and prevention of SQL injection, to create a master-replica connection. Here's an example:\n\n```java\nString sql = \"REPLICATE ALWAYS FROM master CONNECT 'jdbc:postgresql://master_host:master_port/db_name' TO replica CONNECT 'jdbc:postgresql://replica_host:replica_port/db_name'\";\nPreparedStatement ps = con.prepareStatement(sql);\n// Set the parameters for the master and replica connections\n// Execute the PreparedStatement to establish replication\n``` [228c2b49-d1e1-4b36-b2b1-7ef8cd3c6c2d]",
+      "generated_answer": "To set up PostgreSQL replication, you first need to create a standby server. On the primary server, obtain a WAL (Write Ahead Log) file and copy it to the standby server. Then, on the standby server, use the `receive_ wal_file` command to apply the WAL file. After that, start replication by executing `replication_start`. In your provided chunks, there is no information about setting up PostgreSQL replication. [434e48c5-b213-43c4-a1d5-63bd470c8be3]",
       "hallucinated": true
     },
     {
@@ -502,9 +502,9 @@
       "hit_at_3": false,
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
-      "status": "FAIL",
-      "generated_answer": "The difference between REST and GraphQL is that REST (Representational State Transfer) is a style of software architecture for distributed systems, which is used for making network requests to access and use data, while GraphQL is a data query and manipulation language for APIs, which provides an efficient and powerful way to fetch exactly the data needed from a server by making a single request. [ef5e21ae-f127-4d88-8e0e-5ffc96fb7687]",
-      "hallucinated": true
+      "status": "PASS",
+      "generated_answer": "not found in your documents",
+      "hallucinated": false
     },
     {
       "id": "q39",
@@ -515,9 +515,9 @@
       "hit_at_3": false,
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
-      "status": "FAIL",
-      "generated_answer": "The Android Activity lifecycle looks like the following stages: NEW, RUNNABLE, BLOCKED (potentially, for waiting to acquire a lock for a synchronized block), and other states as defined in the Java Thread.State enum, such as TERMINATED or TIMED_WAITING. However, the provided context does not specifically discuss the Android Activity lifecycle. [39f3e982-2740-4a6d-8560-299dfaa475a1]",
-      "hallucinated": true
+      "status": "PASS",
+      "generated_answer": "not found in your documents",
+      "hallucinated": false
     },
     {
       "id": "q40",
@@ -529,7 +529,7 @@
       "hit_at_5": false,
       "reciprocal_rank": 0.0,
       "status": "PASS",
-      "generated_answer": "Not found in your documents. The provided context does not contain information about writing a React component with hooks in JavaScript. [54881d75-8cd1-4d89-b504-9fef75f183e7]",
+      "generated_answer": "not found in your documents",
       "hallucinated": false
     }
   ]

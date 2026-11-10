@@ -19,8 +19,8 @@ rerank_top_n = 20           # default: 20 (fused candidates passed to reranker)
 rerank_keep = 5             # default: 5 (candidates kept for generation)
 
 [thresholds]
-# not_found_threshold: set on the eval set, not guessed.
-# not_found_threshold = 0.605  # disabled for now
+# Chosen from eval/calibration.jsonl (vector top score, 15 answerable / 15 unanswerable). Not tuned on eval/questions.jsonl.
+not_found_threshold = 0.605
 
 
 [embedding]
