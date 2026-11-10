@@ -9,8 +9,10 @@ Responsible for:
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 from pathlib import Path
+import re
 import tomllib
 from typing import Any, Mapping, Sequence
 
@@ -60,6 +62,89 @@ def compute_file_sha256(file_path: str | Path) -> str:
     return hasher.hexdigest()
 
 
+PAGE_NUMBER_PATTERN = re.compile(
+    r"^(?:page\s+\d+(?:\s*(?:/|of)\s*\d+)?|\d+|[—\-]\s*\d+\s*[—\-])$",
+    re.IGNORECASE,
+)
+
+
+def is_table_of_contents_page(text: str, min_dotted_lines: int = 4) -> bool:
+    """Detect if a page is a table of contents based on dotted leader lines or dots."""
+    dotted_lines = [
+        line for line in text.splitlines()
+        if re.search(r"(?:\.\s*){4,}", line)
+    ]
+    return len(dotted_lines) >= min_dotted_lines
+
+
+def remove_headers_and_footers(
+    pages: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Remove repeated page headers and footers (such as titles and 'Page N').
+
+    A line is considered a repeated header if it appears in the top 2 lines of
+    multiple pages (or matches a page-number pattern).
+    A line is considered a repeated footer if it appears in the bottom 2 lines of
+    multiple pages (or matches a page-number pattern).
+    """
+    if not pages:
+        return []
+
+    top_counts: Counter[str] = Counter()
+    bottom_counts: Counter[str] = Counter()
+
+    for _, text in pages:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in lines[:2]:
+            if not PAGE_NUMBER_PATTERN.match(line):
+                top_counts[line] += 1
+        for line in lines[-2:]:
+            if (
+                not PAGE_NUMBER_PATTERN.match(line)
+                and len(line) > 2
+                and line not in ("}", "{", ";", "};", ")")
+            ):
+                bottom_counts[line] += 1
+
+    total_pages = len(pages)
+    min_repeat = 2 if total_pages >= 2 else 999
+    repeated_headers = {line for line, count in top_counts.items() if count >= min_repeat}
+    repeated_footers = {line for line, count in bottom_counts.items() if count >= min_repeat}
+
+    cleaned_pages: list[tuple[int, str]] = []
+    for page_num, text in pages:
+        lines = text.splitlines()
+
+        # Clean top
+        start_idx = 0
+        while start_idx < len(lines):
+            line_s = lines[start_idx].strip()
+            if not line_s:
+                start_idx += 1
+                continue
+            if PAGE_NUMBER_PATTERN.match(line_s) or line_s in repeated_headers:
+                start_idx += 1
+                continue
+            break
+
+        # Clean bottom
+        end_idx = len(lines)
+        while end_idx > start_idx:
+            line_s = lines[end_idx - 1].strip()
+            if not line_s:
+                end_idx -= 1
+                continue
+            if PAGE_NUMBER_PATTERN.match(line_s) or line_s in repeated_footers:
+                end_idx -= 1
+                continue
+            break
+
+        cleaned_text = "\n".join(lines[start_idx:end_idx]).strip()
+        cleaned_pages.append((page_num, cleaned_text))
+
+    return cleaned_pages
+
+
 def parse_pdf_file(
     file_path: str | Path,
     file_hash: str | None = None,
@@ -83,15 +168,24 @@ def parse_pdf_file(
     if PdfReader is None:
         raise ImportError("pypdf library is required to parse PDFs.")
     reader = PdfReader(str(path))
-    records: list[dict[str, Any]] = []
+    raw_pages: list[tuple[int, str]] = []
 
     for idx, page in enumerate(reader.pages):
         page_num = idx + 1  # 1-indexed page number
         page_text = page.extract_text() or ""
+        # Skip table of contents pages
+        if is_table_of_contents_page(page_text):
+            continue
+        raw_pages.append((page_num, page_text))
+
+    cleaned_pages = remove_headers_and_footers(raw_pages)
+
+    records: list[dict[str, Any]] = []
+    for page_num, text in cleaned_pages:
         records.append({
             "file": str(path),
             "page": page_num,
-            "text": page_text,
+            "text": text,
             "file_hash": file_hash,
         })
 

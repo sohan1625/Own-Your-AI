@@ -14,8 +14,10 @@ from src.ingest import (
     compute_file_sha256,
     get_data_dir_from_config,
     ingest_folder,
+    is_table_of_contents_page,
     parse_folder,
     parse_pdf_file,
+    remove_headers_and_footers,
 )
 
 
@@ -185,6 +187,46 @@ class TestIngest(unittest.TestCase):
         """Verify that an empty folder returns an empty list without error."""
         records = parse_folder(self.dir_path)
         self.assertEqual(records, [])
+
+    def test_remove_repeated_headers_and_footers(self):
+        """Verify that repeated headers (e.g. document title) and 'Page N' lines are stripped."""
+        test_file = self.dir_path / "headers_footers.pdf"
+        pages_content = [
+            "Core Java (J2SE) - Complete Answers\nPage 1\nIntroduction to Java language.\nConfidential Material",
+            "Core Java (J2SE) - Complete Answers\nPage 2\nFeatures and OOP concepts in Java.\nConfidential Material",
+        ]
+        write_test_pdf(test_file, pages_content)
+
+        records = parse_pdf_file(test_file)
+        self.assertEqual(len(records), 2)
+
+        # Verify repeated headers, page numbers, and repeated footers are removed
+        self.assertNotIn("Core Java (J2SE) - Complete Answers", records[0]["text"])
+        self.assertNotIn("Page 1", records[0]["text"])
+        self.assertNotIn("Confidential Material", records[0]["text"])
+        self.assertIn("Introduction to Java language.", records[0]["text"])
+
+        self.assertNotIn("Core Java (J2SE) - Complete Answers", records[1]["text"])
+        self.assertNotIn("Page 2", records[1]["text"])
+        self.assertNotIn("Confidential Material", records[1]["text"])
+        self.assertIn("Features and OOP concepts in Java.", records[1]["text"])
+
+    def test_skip_table_of_contents_pages(self):
+        """Verify that table of contents pages with dotted leader lines are skipped."""
+        test_file = self.dir_path / "toc_doc.pdf"
+        pages_content = [
+            "Title and overview of the course.",
+            "Contents\n1. Overview . . . . . . . . . 1\n2. Fundamentals . . . . . . . . 5\n3. Collections . . . . . . . . 12\n4. Multithreading . . . . . . . 20\n5. Advanced . . . . . . . . . . 30",
+            "Chapter 1: The real substance starts here.",
+        ]
+        write_test_pdf(test_file, pages_content)
+
+        records = parse_pdf_file(test_file)
+        # Page 2 (TOC) must be skipped, leaving 2 records with pages 1 and 3
+        self.assertEqual(len(records), 2)
+        self.assertEqual([r["page"] for r in records], [1, 3])
+        self.assertIn("Title and overview of the course.", records[0]["text"])
+        self.assertIn("Chapter 1: The real substance starts here.", records[1]["text"])
 
 
 if __name__ == "__main__":
