@@ -1,0 +1,30 @@
+{"id":"c01","question":"What does JME stand for, and what is it used for?","answerable":true,"gold_page":8}
+{"id":"c02","question":"What is JEE now called?","answerable":true,"gold_page":8}
+{"id":"c03","question":"Which development tools does the JDK include?","answerable":true,"gold_page":8}
+{"id":"c04","question":"Name two areas where Java is used.","answerable":true,"gold_page":8}
+{"id":"c05","question":"What is the default port for MySQL?","answerable":false,"gold_page":null}
+{"id":"c06","question":"How do you configure a Redis cache in Node.js?","answerable":false,"gold_page":null}
+{"id":"c07","question":"What does the Docker COPY instruction do?","answerable":false,"gold_page":null}
+{"id":"c08","question":"How do I set up a GitHub Actions workflow?","answerable":false,"gold_page":null}
+{"id":"c09","question":"What are the reserved words in Java?","answerable":true,"gold_page":11}
+{"id":"c10","question":"What is an array in Java?","answerable":true,"gold_page":13}
+{"id":"c11","question":"What is a var-arg method?","answerable":true,"gold_page":14}
+{"id":"c12","question":"What are the types of iteration statements (loops) in Java?","answerable":true,"gold_page":17}
+{"id":"c13","question":"What is the difference between a class and an object?","answerable":true,"gold_page":24}
+{"id":"c14","question":"What does the static keyword do?","answerable":true,"gold_page":27}
+{"id":"c15","question":"What is final keyword used for?","answerable":true,"gold_page":27}
+{"id":"c16","question":"What is serialization?","answerable":true,"gold_page":32}
+{"id":"c17","question":"What is a ThreadGroup?","answerable":true,"gold_page":41}
+{"id":"c18","question":"What is the Optional class used for?","answerable":true,"gold_page":44}
+{"id":"c19","question":"What is an Iterator used for?","answerable":true,"gold_page":36}
+{"id":"c20","question":"What is the capital of Japan?","answerable":false,"gold_page":null}
+{"id":"c21","question":"How do I bake sourdough bread?","answerable":false,"gold_page":null}
+{"id":"c22","question":"What is the boiling point of water at sea level in Fahrenheit?","answerable":false,"gold_page":null}
+{"id":"c23","question":"Who wrote the novel Pride and Prejudice?","answerable":false,"gold_page":null}
+{"id":"c24","question":"How do I change a flat tire on a car?","answerable":false,"gold_page":null}
+{"id":"c25","question":"What is the tallest mountain in Africa?","answerable":false,"gold_page":null}
+{"id":"c26","question":"How many players are on a basketball team on the court?","answerable":false,"gold_page":null}
+{"id":"c27","question":"What is the chemical symbol for gold?","answerable":false,"gold_page":null}
+{"id":"c28","question":"How do I reset a forgotten Gmail password?","answerable":false,"gold_page":null}
+{"id":"c29","question":"What year did World War I end?","answerable":false,"gold_page":null}
+{"id":"c30","question":"How do I make a cup of green tea?","answerable":false,"gold_page":null}

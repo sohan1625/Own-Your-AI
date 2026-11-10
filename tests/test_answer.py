@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 import os
 import json
 
-from src.answer import generate_answer, _build_prompt, _validate_host, normalize_answer
+from src.answer import generate_answer, _build_prompt, _validate_host, normalize_answer, is_below_threshold
 
 class TestAnswerGeneration(unittest.TestCase):
     def setUp(self):
@@ -21,8 +21,12 @@ class TestAnswerGeneration(unittest.TestCase):
             "Write a complete sentence that answers the question. "
             "End every sentence that uses information from a chunk with that chunk's ID "
             "in square brackets, like [chunk-id]. "
-            "If the chunks do not contain the answer, reply exactly "
-            "'not found in your documents'."
+            "If the chunks do not contain the answer, reply with only the exact text "
+            "'not found in your documents' and nothing else. Never include that text "
+            "inside a longer answer. "
+            "Answer in at most 3 sentences. Answer only what was asked. "
+            "Do not mention the context, the chunks, or the document. "
+            "Do not describe related concepts unless the question asks for them."
             "\n\nQuestion: What is the answer?\n\nContext:\n"
             "Chunk c1: First chunk text.\nChunk c2: Second chunk text."
         )
@@ -38,6 +42,17 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertIn("Chunk c2: Second chunk text.", prompt)
         self.assertIn("Answer the question using ONLY the provided chunks", prompt)
         self.assertIn("not found in your documents", prompt)
+        self.assertIn("Never include that text inside a longer answer.", prompt)
+
+    def test_prompt_limits_answer_length_and_scope(self):
+        prompt = _build_prompt(self.question, self.sample_chunks)
+        self.assertIn("Answer in at most 3 sentences.", prompt)
+        self.assertIn("Answer only what was asked.", prompt)
+        self.assertIn("Do not mention the context, the chunks, or the document.", prompt)
+        self.assertIn(
+            "Do not describe related concepts unless the question asks for them.",
+            prompt,
+        )
 
     def test_prompt_contains_square_bracket_citation_and_no_labels(self):
         """The prompt must use square-bracket citations."""
@@ -62,7 +77,7 @@ class TestAnswerGeneration(unittest.TestCase):
 
         answer = generate_answer(self.question, self.sample_chunks)
         # Verify the function returned the mocked response text
-        self.assertEqual(answer, "Generated answer")
+        self.assertEqual(answer, "Generated answer [c1]")
         # Verify that the request was built with the correct URL and payload
         args, kwargs = mock_urlopen.call_args
         request = args[0]
@@ -136,6 +151,57 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertEqual(answer_text, "Model answer citing [c1].")
         self.assertFalse(answer_failed)
 
+    def test_is_below_threshold_score_0_60(self):
+        """A score of 0.60 is not blocked while the threshold is disabled."""
+        self.assertFalse(is_below_threshold(0.60))
+
+    def test_is_below_threshold_score_0_61(self):
+        """A score of 0.61 is not blocked while the threshold is disabled."""
+        self.assertFalse(is_below_threshold(0.61))
+
+    @patch('urllib.request.urlopen')
+    def test_generate_answer_ignores_low_score_when_threshold_disabled(self, mock_urlopen):
+        """A low score still generates an answer while threshold checks are disabled."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Generated answer"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        result = generate_answer(self.question, self.sample_chunks, top_score=0.60)
+        self.assertEqual(result, "Generated answer [c1]")
+        mock_urlopen.assert_called_once()
+
+    @patch('urllib.request.urlopen')
+    def test_generate_answer_appends_top_chunk_id_when_citation_is_missing(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Generated answer"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        answer = generate_answer(self.question, self.sample_chunks)
+
+        self.assertEqual(answer, "Generated answer [c1]")
+
+    @patch('urllib.request.urlopen')
+    def test_generate_answer_preserves_existing_valid_citation(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Generated answer [c2]"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        answer = generate_answer(self.question, self.sample_chunks)
+
+        self.assertEqual(answer, "Generated answer [c2]")
+
+    @patch('urllib.request.urlopen')
+    def test_generate_answer_does_not_append_citation_to_not_found(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "response": "not found in your documents"
+        }).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        answer = generate_answer(self.question, self.sample_chunks)
+
+        self.assertEqual(answer, "not found in your documents")
+
 if __name__ == '__main__':
     unittest.main()
 
@@ -181,6 +247,24 @@ class TestNormalizeAnswer(unittest.TestCase):
         self.assertEqual(result, raw.strip())
         # Must not produce [[uuid]] or [[[uuid]]]
         self.assertNotIn(f"[[{self.UUID}]]", result)
+
+    def test_bracketed_non_id_string_is_removed(self):
+        result = normalize_answer(
+            "The class is a blueprint [not found in your documents].",
+            [self.UUID],
+        )
+        self.assertEqual(result, "The class is a blueprint.")
+
+    def test_mixed_answer_removes_bracketed_not_found_text_but_keeps_citation(self):
+        raw = (
+            f"A class is a blueprint [{self.UUID}], and OOP has four pillars "
+            "[not found in your documents] respectively."
+        )
+        result = normalize_answer(raw, [self.UUID])
+        self.assertEqual(
+            result,
+            f"A class is a blueprint [{self.UUID}], and OOP has four pillars respectively.",
+        )
 
 
 if __name__ == '__main__':

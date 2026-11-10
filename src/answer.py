@@ -51,8 +51,12 @@ def _build_prompt(question: str, chunks: List[Dict[str, Any]]) -> str:
         "Write a complete sentence that answers the question. "
         "End every sentence that uses information from a chunk with that chunk's ID "
         "in square brackets, like [chunk-id]. "
-        "If the chunks do not contain the answer, reply exactly "
-        "'not found in your documents'."
+        "If the chunks do not contain the answer, reply with only the exact text "
+        "'not found in your documents' and nothing else. Never include that text "
+        "inside a longer answer. "
+        "Answer in at most 3 sentences. Answer only what was asked. "
+        "Do not mention the context, the chunks, or the document. "
+        "Do not describe related concepts unless the question asks for them."
     )
     # Add each chunk
     chunk_parts = []
@@ -74,6 +78,19 @@ def get_generation_top_k(config_path: str | Path = "config.toml") -> int:
         return int(val)
     except Exception:
         return 1
+
+
+def is_below_threshold(top_vector_score: float, config_path: str | Path = "config.toml") -> bool:
+    """Read not_found_threshold from [thresholds] and return True if top_vector_score < threshold."""
+    try:
+        cfg = _load_config(config_path)
+        thresholds_cfg = cfg.get("thresholds", {})
+        threshold = thresholds_cfg.get("not_found_threshold")
+        if threshold is None:
+            return False
+        return float(top_vector_score) < float(threshold)
+    except Exception:
+        return False
 
 
 def normalize_answer(raw_text: str, chunk_ids: List[str]) -> str:
@@ -126,24 +143,46 @@ def normalize_answer(raw_text: str, chunk_ids: List[str]) -> str:
         cut_lines.append(line)
     text = "\n".join(cut_lines)
 
-    # 3. Strip leading/trailing whitespace.
+    # 3. Keep only bracketed IDs that belong to the supplied chunks.
+    allowed_ids = set(chunk_ids)
+    text = re.sub(
+        r"\[([^\[\]]*)\]",
+        lambda match: match.group(0) if match.group(1) in allowed_ids else " ",
+        text,
+    )
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r" ([,.;:!?])", r"\1", text)
+
+    # 4. Strip leading/trailing whitespace.
     return text.strip()
 
 
-def generate_answer(question: str, chunks: List[Dict[str, Any]], *, config_path: str | Path = "config.toml") -> str:
+def generate_answer(
+    question: str,
+    chunks: List[Dict[str, Any]],
+    top_score: float | None = None,
+    *,
+    config_path: str | Path = "config.toml",
+) -> str:
     """Generate an answer for *question* using retrieved *chunks*.
 
     The function:
-    1. Loads the Ollama ``model`` name and ``host`` from the ``[ollama]`` section of
+    1. If ``top_score`` is provided and is below the ``not_found_threshold``
+       configured in ``config.toml``, immediately returns "not found in your documents"
+       without calling Ollama.
+    2. Loads the Ollama ``model`` name and ``host`` from the ``[ollama]`` section of
        ``config.toml`` (or falls back to environment variables ``OLLAMA_MODEL`` and
        ``OLLAMA_HOST``).
-    2. Validates that the host points to localhost; otherwise a ``ValueError`` is
+    3. Validates that the host points to localhost; otherwise a ``ValueError`` is
        raised.
-    3. Builds a prompt that tells the model to answer only from the provided
+    4. Builds a prompt that tells the model to answer only from the provided
        chunks (limited to top GENERATION_TOP_K chunks) and to cite chunk IDs, with a fallback "not found" response.
-    4. Sends a POST request to ``<host>/api/generate`` using the standard library
+    5. Sends a POST request to ``<host>/api/generate`` using the standard library
        ``urllib.request`` and returns the generated answer text.
     """
+    if top_score is not None and is_below_threshold(top_score, config_path=config_path):
+        return "not found in your documents"
+
     cfg = _load_config(config_path)
     ollama_cfg = cfg.get("ollama", {})
     model = ollama_cfg.get("model") or os.getenv("OLLAMA_MODEL")
@@ -170,7 +209,22 @@ def generate_answer(question: str, chunks: List[Dict[str, Any]], *, config_path:
                 c.get("chunk_id") or c.get("id") or "UNKNOWN"
                 for c in chunks_to_use
             ]
-            return normalize_answer(raw_response, chunk_ids)
+            answer = normalize_answer(raw_response, chunk_ids)
+            if answer == "not found in your documents":
+                return answer
+
+            passed_chunk_ids = [
+                chunk.get("chunk_id") or chunk.get("id")
+                for chunk in chunks
+                if chunk.get("chunk_id") or chunk.get("id")
+            ]
+            if not any(f"[{chunk_id}]" in answer for chunk_id in passed_chunk_ids):
+                top_chunk_id = None
+                if chunks:
+                    top_chunk_id = chunks[0].get("chunk_id") or chunks[0].get("id")
+                if top_chunk_id:
+                    answer = f"{answer} [{top_chunk_id}]"
+            return answer
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(

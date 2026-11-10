@@ -22,8 +22,8 @@ if str(project_root) not in sys.path:
 
 from src.ingest import parse_folder
 from src.chunk import chunk_page_records
-from src.index import build_bm25_index
-from src.retrieve import keyword_retrieve
+from src.index import build_bm25_index, build_chunk_embeddings
+from src.retrieve import keyword_retrieve, vector_retrieve
 from src.answer import generate_answer, get_generation_top_k
 from src.cite import resolve_citations, CitationResult
 
@@ -76,11 +76,22 @@ def main() -> None:
     top_k = get_generation_top_k()
     generation_chunks = retrieved[:top_k]
 
+    # Compute top vector score for the question
+    top_vector_score = None
+    if chunks:
+        try:
+            vectors = build_chunk_embeddings(chunks)
+            vec_results = vector_retrieve(question, chunks, vectors, top_n=1)
+            if vec_results:
+                top_vector_score = vec_results[0][1]
+        except Exception as exc:
+            print(f"[Warning] Vector retrieval failed: {exc}")
+
     # ------------------------------------------------------------
     # 6. Generate an answer (guard against missing Ollama server)
     # ------------------------------------------------------------
     try:
-        answer_text = generate_answer(question, generation_chunks)
+        answer_text = generate_answer(question, generation_chunks, top_score=top_vector_score)
     except Exception as exc:
         answer_text = f"[Error generating answer: {exc}]"
 

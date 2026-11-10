@@ -32,6 +32,7 @@ from src.retrieve import (
     load_config,
 )
 from src.answer import generate_answer, get_generation_top_k
+import src.answer as answer_module
 from src.cite import resolve_citations
 from scripts.demo import evaluate_citations_and_answer
 
@@ -149,8 +150,11 @@ def run_evaluation(
         bm25_index = build_bm25_index(chunks)
 
     # Embed chunks once and cache in memory if needed
-    if vectors is None and retriever in ("vector", "hybrid"):
-        vectors = build_chunk_embeddings(chunks, config_path=config_path)
+    if vectors is None and (retriever in ("vector", "hybrid") or with_answers):
+        try:
+            vectors = build_chunk_embeddings(chunks, config_path=config_path)
+        except Exception:
+            vectors = None
 
     rrf_k = get_rrf_k(config_path)
     retrieval_params = get_retrieval_params(config_path)
@@ -172,6 +176,8 @@ def run_evaluation(
         gold_passages = q.get("gold_passages", [])
 
         # Retrieval based on selected retriever strategy
+        scored_chunks = []
+        vector_results = []
         if retriever == "keyword":
             retrieved_raw = keyword_retrieve(q_text, bm25_index, config_path=config_path)
             retrieved = [] if isinstance(retrieved_raw, str) else retrieved_raw
@@ -198,8 +204,34 @@ def run_evaluation(
         if with_answers:
             top_k = get_generation_top_k(config_path=config_path)
             gen_chunks = retrieved[:top_k]
+            top_vector_score: Optional[float] = None
+            if retriever == "hybrid" and vector_results:
+                top_vector_score = vector_results[0][1]
+            elif retriever == "vector" and scored_chunks:
+                top_vector_score = scored_chunks[0][1]
+            elif vectors is not None and chunks is not None:
+                v_res = vector_retrieve(q_text, chunks, vectors, top_n=1, config_path=config_path)
+                top_vector_score = v_res[0][1] if v_res else None
+
             try:
-                raw_ans = generate_answer(q_text, gen_chunks, config_path=config_path)
+                if qid in {"q04", "q05"}:
+                    original_normalize_answer = answer_module.normalize_answer
+
+                    def print_raw_response(raw_response: str, chunk_ids: List[str]) -> str:
+                        print(f"[{qid} raw model response before normalize_answer]\n{raw_response}", flush=True)
+                        return original_normalize_answer(raw_response, chunk_ids)
+
+                    answer_module.normalize_answer = print_raw_response
+                    try:
+                        raw_ans = generate_answer(
+                            q_text, gen_chunks, config_path=config_path, top_score=top_vector_score
+                        )
+                    finally:
+                        answer_module.normalize_answer = original_normalize_answer
+                else:
+                    raw_ans = generate_answer(
+                        q_text, gen_chunks, config_path=config_path, top_score=top_vector_score
+                    )
             except Exception as exc:
                 raw_ans = f"[Error: {exc}]"
             cit_res = resolve_citations(raw_ans, gen_chunks)
@@ -349,4 +381,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

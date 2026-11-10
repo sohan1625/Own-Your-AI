@@ -20,8 +20,7 @@ rerank_keep = 5             # default: 5 (candidates kept for generation)
 
 [thresholds]
 # not_found_threshold: set on the eval set, not guessed.
-# (Standard TOML v1.0 has no null keyword; left commented out / null until set on the eval set)
-# not_found_threshold = null
+# not_found_threshold = 0.605  # disabled for now
 
 
 [embedding]
@@ -32,7 +31,7 @@ search_document_prefix = "search_document: "
 
 
 [generation]
-top_k = 1
+top_k = 4
 
 
 [ollama]
