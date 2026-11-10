@@ -1,0 +1,4 @@
+{"id": "fx01", "question": "What is Python?", "answerable": true, "gold_passages": [{"file": "sample.pdf", "page": 1}], "reference_answer": "Python is a programming language."}
+{"id": "fx02", "question": "What is quantum gravity in Java?", "answerable": true, "gold_passages": [{"file": "sample.pdf", "page": 99}], "reference_answer": "Not present in documents."}
+{"id": "fx03", "question": "What is the capital of Mars?", "answerable": false, "gold_passages": [], "reference_answer": null}
+
