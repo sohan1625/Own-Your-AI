@@ -34,6 +34,9 @@ def initialize_database() -> None:
     try:
         with connect() as connection:
             statements = (
+                # pgvector lives in public and is always schema-qualified below, so it
+                # resolves under any search_path (the tests use an isolated schema).
+                "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public",
                 """
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
@@ -54,6 +57,7 @@ def initialize_database() -> None:
                     text TEXT NOT NULL
                 )
                 """,
+                "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding public.vector",
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
@@ -101,7 +105,22 @@ def get_document_by_sha256(sha256: str) -> dict[str, Any] | None:
         ).fetchone()
 
 
-def insert_document(document: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
+def _vector_literal(vector: list[float] | None) -> str | None:
+    if not vector:
+        return None
+    return "[" + ",".join(repr(float(value)) for value in vector) + "]"
+
+
+def insert_document(
+    document: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    embeddings: list[list[float]] | None = None,
+) -> None:
+    """Insert a document and its chunks. ``embeddings`` aligns with ``chunks``;
+    when it is missing, chunk embeddings stay NULL and are filled in later."""
+    if embeddings is not None and len(embeddings) != len(chunks):
+        raise ValueError("embeddings must align with chunks")
+    vectors = embeddings if embeddings is not None else [None] * len(chunks)
     with connect() as connection:
         connection.execute(
             """
@@ -118,8 +137,8 @@ def insert_document(document: dict[str, Any], chunks: list[dict[str, Any]]) -> N
         )
         connection.cursor().executemany(
             """
-            INSERT INTO chunks (id, doc_id, page, start_char, end_char, text)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO chunks (id, doc_id, page, start_char, end_char, text, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::public.vector)
             """,
             [
                 (
@@ -129,10 +148,45 @@ def insert_document(document: dict[str, Any], chunks: list[dict[str, Any]]) -> N
                     chunk["start_char"],
                     chunk["end_char"],
                     chunk["text"],
+                    _vector_literal(vector),
                 )
-                for chunk in chunks
+                for chunk, vector in zip(chunks, vectors)
             ],
         )
+
+
+def get_chunks_without_embeddings() -> list[dict[str, Any]]:
+    with connect() as connection:
+        return connection.execute(
+            "SELECT id AS chunk_id, text FROM chunks WHERE embedding IS NULL ORDER BY id"
+        ).fetchall()
+
+
+def set_chunk_embeddings(embeddings: dict[str, list[float]]) -> None:
+    """Store embeddings keyed by chunk ID."""
+    with connect() as connection:
+        connection.cursor().executemany(
+            "UPDATE chunks SET embedding = %s::public.vector WHERE id = %s",
+            [(_vector_literal(vector), chunk_id) for chunk_id, vector in embeddings.items()],
+        )
+
+
+def vector_search(
+    query_vector: list[float], doc_ids: list[str], top_n: int
+) -> list[tuple[str, float]]:
+    """Return ``(chunk_id, cosine similarity)`` for the closest chunks in ``doc_ids``."""
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, 1 - (embedding OPERATOR(public.<=>) %(query)s::public.vector) AS score
+            FROM chunks
+            WHERE doc_id = ANY(%(doc_ids)s) AND embedding IS NOT NULL
+            ORDER BY embedding OPERATOR(public.<=>) %(query)s::public.vector, id
+            LIMIT %(top_n)s
+            """,
+            {"query": _vector_literal(query_vector), "doc_ids": doc_ids, "top_n": top_n},
+        ).fetchall()
+    return [(row["id"], float(row["score"])) for row in rows]
 
 
 def get_chunks() -> list[dict[str, Any]]:

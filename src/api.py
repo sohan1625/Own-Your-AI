@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import tomllib
 import uuid
 from contextlib import asynccontextmanager
 from hashlib import sha256
@@ -18,12 +20,22 @@ from src import cache, db
 from src.answer import generate_answer, get_generation_top_k
 from src.chunk import chunk_page_records
 from src.cite import resolve_citations
-from src.index import bm25_search, build_bm25_index
+from src.fuse import get_rrf_k, reciprocal_rank_fusion
+from src.index import (
+    bm25_search,
+    build_bm25_index,
+    build_chunk_embeddings,
+    embed_text,
+    get_embedding_prefix,
+)
 from src.ingest import parse_pdf_file
 from src.retrieve import get_retrieval_params
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = ROOT / "config.toml"
 STATIC_INDEX = ROOT / "static" / "index.html"
+# uvicorn's own logger, so messages appear in the server output.
+logger = logging.getLogger("uvicorn.error")
 UPLOAD_DIR = ROOT / "data" / "uploads"
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 documents: dict[str, dict[str, Any]] = {}
@@ -35,6 +47,7 @@ async def lifespan(_: FastAPI):
     _invalidate_document_cache()
     db.initialize_database()
     cache.initialize_cache()
+    _backfill_embeddings()
     yield
 
 
@@ -54,6 +67,63 @@ def _invalidate_document_cache(document_id: str | None = None) -> None:
     else:
         documents.pop(document_id, None)
     _bm25_index = None
+
+
+def _retrieval_method() -> str:
+    """``hybrid`` (keyword + vector, fused with RRF) or ``keyword`` (BM25 only)."""
+    with open(CONFIG_PATH, "rb") as config_file:
+        method = tomllib.load(config_file).get("retrieval", {}).get("method", "hybrid")
+    if method not in {"hybrid", "keyword"}:
+        raise ValueError(f"[retrieval] method must be 'hybrid' or 'keyword', not {method!r}")
+    return method
+
+
+def _embed_chunks(chunks: list[dict[str, Any]]) -> list[list[float]] | None:
+    """Embed chunks with the local model, or return None if that is not possible."""
+    try:
+        embeddings = build_chunk_embeddings(chunks, config_path=CONFIG_PATH)
+    except Exception as exc:
+        logger.warning(
+            "Could not embed %d chunks (is Ollama running?); they use keyword search "
+            "until the next startup: %s",
+            len(chunks),
+            exc,
+        )
+        return None
+    return embeddings if len(embeddings) == len(chunks) else None
+
+
+def _backfill_embeddings() -> None:
+    """Embed chunks stored without embeddings (older uploads, or Ollama was down)."""
+    if _retrieval_method() != "hybrid":
+        return
+    missing = db.get_chunks_without_embeddings()
+    if not missing:
+        return
+    embeddings = _embed_chunks(missing)
+    if embeddings is None:
+        return
+    db.set_chunk_embeddings(
+        {chunk["chunk_id"]: vector for chunk, vector in zip(missing, embeddings) if vector}
+    )
+    logger.info("Embedded %d chunks for vector search.", len(missing))
+
+
+def _vector_ranking(query: str, doc_ids: list[str], top_n: int) -> list[tuple[str, float]]:
+    """Chunk IDs in ``doc_ids`` ranked by cosine similarity to ``query``, best first.
+
+    Returns an empty list when vector search is unavailable, so /ask falls back to
+    keyword search instead of failing.
+    """
+    try:
+        prefix = get_embedding_prefix("query", config_path=CONFIG_PATH)
+        query_vector = embed_text(query, prefix=prefix, config_path=CONFIG_PATH)
+        if not query_vector:
+            return []
+        return db.vector_search(query_vector, doc_ids, top_n)
+    except Exception as exc:
+        logger.warning("Vector search unavailable; using keyword search only: %s", exc)
+        return []
 
 
 def _get_bm25_index() -> dict[str, Any]:
@@ -111,6 +181,7 @@ async def _index_upload(file: UploadFile) -> dict[str, Any]:
                 detail="Could not split the PDF text into chunks.",
             )
 
+        embeddings = _embed_chunks(chunks) if _retrieval_method() == "hybrid" else None
         db.insert_document(
             {
                 "id": document_id,
@@ -119,6 +190,7 @@ async def _index_upload(file: UploadFile) -> dict[str, Any]:
                 "pages": pages,
             },
             chunks,
+            embeddings,
         )
         persisted = True
     except (OSError, ValueError) as exc:
@@ -230,15 +302,31 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
         + [question]
     )
     all_results = bm25_search(retrieval_query, index, top_n=len(index["chunks"]))
-    ranked_chunks = [
-        chunk
+    ranked_ids = [
+        chunk["chunk_id"]
         for chunk, _ in all_results
         if chunk["doc_id"] in selected_id_set
     ][:top_n]
+
+    # Hybrid: fuse the keyword and vector rankings with RRF. The best vector score
+    # feeds the calibrated "not found" threshold in generate_answer.
+    top_vector_score: float | None = None
+    if _retrieval_method() == "hybrid":
+        vector_results = _vector_ranking(retrieval_query, selected_ids, top_n)
+        if vector_results:
+            top_vector_score = vector_results[0][1]
+            ranked_ids = reciprocal_rank_fusion(
+                [ranked_ids, [chunk_id for chunk_id, _ in vector_results]],
+                k=get_rrf_k(CONFIG_PATH),
+            )[:top_n]
+
+    chunks_by_id = {chunk["chunk_id"]: chunk for chunk in index["chunks"]}
+    ranked_chunks = [chunks_by_id[chunk_id] for chunk_id in ranked_ids if chunk_id in chunks_by_id]
     generation_chunks = ranked_chunks[:get_generation_top_k(ROOT / "config.toml")]
     answer = generate_answer(
         question,
         generation_chunks,
+        top_score=top_vector_score,
         conversation_history=conversation_history,
         config_path=ROOT / "config.toml",
     )

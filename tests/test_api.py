@@ -198,6 +198,7 @@ def test_followup_retrieves_and_answers_with_recent_conversation(monkeypatch):
     monkeypatch.setattr(api.db, "save_exchange", lambda *args: None)
     monkeypatch.setattr(api, "_get_bm25_index", lambda: {"chunks": [chunk]})
     monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 5})
+    monkeypatch.setattr(api, "_vector_ranking", lambda *args: [])
     monkeypatch.setattr(api, "get_generation_top_k", lambda _: 1)
 
     def search(query, index, top_n):
@@ -273,6 +274,7 @@ def test_followup_search_is_not_buried_by_previous_answer(monkeypatch):
     index = api.build_bm25_index([firewall, osi, *distractors])
     monkeypatch.setattr(api, "_get_bm25_index", lambda: index)
     monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 2})
+    monkeypatch.setattr(api, "_vector_ranking", lambda *args: [])
     monkeypatch.setattr(api, "get_generation_top_k", lambda _: 2)
 
     def generate(question, chunks, **kwargs):
