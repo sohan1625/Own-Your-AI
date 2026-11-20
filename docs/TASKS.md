@@ -44,8 +44,8 @@ Status key: [ ] todo, [~] in progress, [x] done
 
 ## M4: Proof and packaging
 
-- [ ] Run offline test and record in PRIVACY.md
-- [ ] Run deletion test
+- [x] Run offline test and record in PRIVACY.md — 9 of 9 with Wi-Fi off; online audit: no outbound connections from the app or Ollama server (`python -m scripts.offline_check`)
+- [x] Run deletion test — 15 of 15 checks pass (`python -m scripts.deletion_check`); chat history and PostgreSQL's write-ahead log retain text, see PRIVACY.md
 - [x] Run benchmarks and record in BENCHMARKS.md
 - [ ] Quantized vs. full-precision comparison
 - [ ] Setup under 15 minutes, verified by a clean run

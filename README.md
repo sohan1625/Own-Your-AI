@@ -178,7 +178,7 @@ If pytest crashes at the end with `PermissionError` on its temp folder (a Window
 
 The eval set is in `eval/questions.jsonl`. It was written for a private PDF that is not included in this repository, so to reproduce the numbers you need your own documents and questions in the same format.
 
-1. Put the PDFs in `data/` (the folder is git-ignored). Note that the app also saves uploads in `data/uploads/`, which the eval scripts read too; move them out first.
+1. Put the PDFs in `data/` (the folder is git-ignored). The app never reads `data/`; its own uploads go to `storage/uploads/`.
 2. Run:
 
 ```powershell
@@ -207,8 +207,9 @@ src/
   db.py         PostgreSQL and pgvector storage
 static/
   index.html    The web UI
-scripts/        eval.py, calibrate.py, demo.py
+scripts/        eval.py, calibrate.py, demo.py, deletion_check.py, offline_check.py
 eval/           Eval and calibration question sets, results
+storage/        Uploaded PDFs and check results (created at runtime, git-ignored)
 tests/          pytest suite
 docs/           Requirements, design, decisions, eval, benchmarks, privacy, tasks
 config.toml     All tunable settings
@@ -217,9 +218,17 @@ docker-compose.yml
 
 ## Privacy
 
-- Documents, chunks, embeddings, questions, answers, and chat history are stored only in the local PostgreSQL database (a Docker volume) and `data/uploads/`.
-- The only network use at runtime is HTTP to Ollama on 127.0.0.1; the code rejects any other model host.
-- Deleting a document removes its file, chunks, embeddings, and cached answers.
+- Documents, chunks, embeddings, questions, answers, and chat history are stored only in the local PostgreSQL database (a Docker volume) and `storage/uploads/`.
+- The only network use at runtime is HTTP to Ollama on 127.0.0.1; the code rejects any other model host. (Ollama's own tray program checks ollama.com for updates; it never sees your documents.)
+- Deleting a document removes its file, chunks, embeddings, and cached answers. Chat history is kept.
+
+Both claims are checked by scripts that run the real app and models in a temporary database schema:
+
+```powershell
+python -m scripts.deletion_check                  # 15 checks that a deleted document is gone everywhere
+python -m scripts.offline_check                   # run with the network off: upload, ask, follow-up, cache, delete
+python -m scripts.offline_check --with-network    # online audit: no outbound connections from the app or Ollama server
+```
 
 See [docs/PRIVACY.md](docs/PRIVACY.md).
 
@@ -227,7 +236,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Working end to end, with results measured. Not done yet:
 
-- Formal offline test and deletion test ([docs/PRIVACY.md](docs/PRIVACY.md))
+- No way to delete a chat yet; chats keep answers from deleted documents
 - Reranker experiment, and faithfulness and citation-accuracy metrics
 - Full-precision vs. quantized model comparison
 - Re-uploading a changed PDF adds a second document instead of replacing the first

@@ -43,6 +43,7 @@ Options considered: Keyword only; vector only; hybrid with weighted score sum; h
 Decision: Hybrid with RRF.
 Reasons: No need to normalize scores across retrievers.
 Tradeoffs accepted: Two indexes to maintain.
+Implementation note (2026-11-20): the app now uses hybrid retrieval (BM25 + pgvector, RRF k = 60). On the eval set it raised Recall@3 from 0.867 (keyword) to 0.967. `[retrieval] method = "keyword"` switches it off.
 
 ## D-004: Backend language is Python
 Date: 2026-11-09
@@ -99,5 +100,50 @@ Decision: v1 ships without a reranker. In M3, test the MiniLM cross-encoder agai
 Reasons: The PRD requires measuring with and without reranking. Starting without it keeps the pipeline simpler and makes the first working version faster to reach.
 Tradeoffs accepted: If the reranker helps, the v1 numbers come from a later milestone. It is also the easiest component to drop if time runs short.
 
+## D-010: Answer cache in PostgreSQL
+Date: 2026-11-20
+Status: Accepted
+Context: Each answer takes about 7 s on the target laptop. Repeated questions are common in a personal Q&A tool.
+Options considered: No cache; in-memory cache; cache table in PostgreSQL.
+Decision: An `answer_cache` table keyed by a SHA-256 of the normalized question, the sorted document IDs, and each document's hash. Refusals and follow-up questions are not cached. Deleting a document deletes every cached answer that used it.
+Reasons: Survives restarts, uses the database already in place, and including document hashes in the key means a changed document can never return a stale answer. A repeat question returns in about 0.13 s.
+Tradeoffs accepted: Follow-ups are never cached, because the key does not include the chat. A cached answer is fixed even if the model or prompt changes; the cache must be cleared after such changes.
+
+## D-011: Follow-up search uses the previous question, not the previous answer
+Date: 2026-11-20
+Status: Accepted
+Context: Follow-ups such as "Explain those." need context to search. The first version added the previous question and answer to the search query.
+Options considered: Search with the new question only; add the previous question and answer; add only the previous question; run both searches and fuse them.
+Decision: Add only the previous user question. The full recent chat still goes into the prompt.
+Reasons: A long previous answer outweighed the new question: "explain firewalls" asked after "what is osi model" ranked the right page 9th (only 4 chunks reach the model); with the previous question only it ranked 2nd. The new question alone finds nothing for "Explain those.", and fusing both searches dropped the right page for that case to 13th.
+Tradeoffs accepted: A previous question that strongly matches its own topic can still compete with the new one.
+
+## D-012: Keep the citation fallback and the vector-score not-found threshold
+Date: 2026-11-20
+Status: Accepted (revisit with a reranker or a model that cites reliably)
+Context: On the eval set, 2 of 10 unanswerable questions were answered from general knowledge, and 4 of 30 answerable ones were refused by the threshold. The citation fallback (append the top chunk's ID when the model cites nothing) let the general-knowledge answers look cited.
+Options considered: Drop the fallback; drop the threshold; drop both; keep both.
+Decision: Keep both. Measured on one set of 40 answers: both on gives 2 hallucinations and 4 false refusals; threshold off gives 7 and 0; fallback off gives 0 and 21; both off gives 1 and 18.
+Reasons: mistral leaves out citations on most correct answers, so without the fallback most correct answers become refusals. Without the threshold most unanswerable questions get answered.
+Tradeoffs accepted: The hallucination target (< 10%) is still missed. Reworded refusals are normalized to "not found in your documents" so they are neither cached nor shown with a citation.
+
+## D-013: Reach Ollama at 127.0.0.1, not localhost
+Date: 2026-11-20
+Status: Accepted
+Context: Every embedding and generation request took about 2.1 s longer than it should.
+Options considered: Keep `localhost`; use `127.0.0.1`; make Ollama listen on IPv6 as well.
+Decision: `http://127.0.0.1:11434` in `config.toml` and the code defaults.
+Reasons: On Windows, `localhost` resolves to IPv6 `::1` first, and Ollama listens only on IPv4, so each request waited for the IPv6 attempt to fail. One embedding went from about 2,150 ms to 25 ms; indexing a 47-page PDF from 98.7 s to 3.6 s.
+Tradeoffs accepted: None found. The localhost-only privacy guard accepts both forms.
+
+## D-014: App uploads live in storage/uploads, not data/
+Date: 2026-11-20
+Status: Accepted
+Context: Uploads were saved in `data/uploads/`, inside `data/`, which the eval scripts scan. An uploaded PDF silently became part of the eval corpus.
+Options considered: Make the eval skip `data/uploads/`; move uploads elsewhere.
+Decision: Save uploads in `storage/uploads/` (git-ignored). `data/` holds only the eval corpus.
+Reasons: Keeps the app's data and the eval corpus separate without special cases in the eval code.
+Tradeoffs accepted: Existing uploads had to be moved once.
+
 ## Pending
-- None. All stack decisions are recorded. Next: write the eval set and run the M1 tasks.
+- Whether to add a reranker (D-009), and whether a different model would cite reliably enough to drop the citation fallback (D-012).

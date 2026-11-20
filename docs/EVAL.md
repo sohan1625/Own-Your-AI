@@ -53,7 +53,7 @@ Report each on the same frozen set.
 | 2026-11-10 | Hybrid (BM25 + vector, RRF k = 60), top 4 to mistral, not-found threshold 0.605 | 1.00 | 0.803 | Not measured | 20% (2 of 10) | Recall@1 0.633, @3 0.967. Meets the Recall@5 target; misses the hallucination target (< 10%). 4 of 30 answerable questions wrongly refused. `eval/results_hybrid.json` |
 | — | Hybrid + reranker | — | — | — | — | Not run yet |
 
-Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), frozen since 2026-11-10. Corpus: `data/Core_Java_Complete_Answers.pdf` (44 chunks). Note: `data/` also holds app uploads (`data/uploads/`), which `parse_folder` scans too; eval runs must exclude them.
+Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), frozen since 2026-11-10. Corpus: `data/Core_Java_Complete_Answers.pdf` (44 chunks). Until 2026-11-20 the app saved uploads in `data/uploads/`, which `parse_folder` also scans; uploads now go to `storage/uploads/` (D-014).
 
 ### Misses (hybrid, with answers)
 
