@@ -37,3 +37,7 @@ top_k = 4
 [ollama]
 model = "mistral"
 host = "http://localhost:11434"
+
+
+[cache]
+enabled = true              # answer cache in PostgreSQL; false skips it entirely

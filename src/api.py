@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from src import db
+from src import cache, db
 from src.answer import generate_answer, get_generation_top_k
 from src.chunk import chunk_page_records
 from src.cite import resolve_citations
@@ -34,6 +34,7 @@ _bm25_index: dict[str, Any] | None = None
 async def lifespan(_: FastAPI):
     _invalidate_document_cache()
     db.initialize_database()
+    cache.initialize_cache()
     yield
 
 
@@ -164,6 +165,7 @@ def remove_document(document_id: str) -> dict[str, bool]:
     if deleted is None:
         raise HTTPException(status_code=404, detail="Document not found.")
 
+    cache.delete_for_document(document_id)
     _invalidate_document_cache(document_id)
     upload_path.unlink(missing_ok=True)
     return {"deleted": True}
@@ -198,6 +200,25 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
             if message["role"] in {"user", "assistant"}
         ]
 
+    # The cache key covers only the question and documents, so answers that depend
+    # on earlier turns (follow-ups) are neither served from nor written to the cache.
+    cache_key: str | None = None
+    if not conversation_history and cache.is_enabled(ROOT / "config.toml"):
+        hashes_by_id = {document["id"]: document["sha256"] for document in available_documents}
+        doc_hashes = {document_id: hashes_by_id[document_id] for document_id in selected_ids}
+        cache_key = cache.make_key(question, doc_hashes)
+        hit = cache.get(cache_key)
+        if hit is not None:
+            if conversation_id is None:
+                conversation_id = db.create_conversation(question[:120])
+            db.save_exchange(conversation_id, question, hit["answer"], hit["citations"])
+            return {
+                "answer": hit["answer"],
+                "citations": hit["citations"],
+                "conversation_id": conversation_id,
+                "cached": True,
+            }
+
     index = _get_bm25_index()
     top_n = get_retrieval_params(ROOT / "config.toml")["top_n"]
     selected_id_set = set(selected_ids)
@@ -231,10 +252,13 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
     if conversation_id is None:
         conversation_id = db.create_conversation(question[:120])
     db.save_exchange(conversation_id, question, answer, citations)
+    if cache_key is not None:
+        cache.store(cache_key, question, doc_hashes, answer, citations)
     return {
         "answer": answer,
         "citations": citations,
         "conversation_id": conversation_id,
+        "cached": False,
     }
 
 
