@@ -53,7 +53,7 @@ Report each on the same frozen set.
 | 2026-11-10 | Hybrid (BM25 + vector, RRF k = 60), top 4 to mistral, not-found threshold 0.605 | 1.00 | 0.803 | Not measured | 20% (2 of 10) | Recall@1 0.633, @3 0.967. Meets the Recall@5 target; misses the hallucination target (< 10%). 4 of 30 answerable questions wrongly refused. `eval/results_hybrid.json` |
 | — | Hybrid + reranker | — | — | — | — | Not run yet |
 
-Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), frozen since 2026-11-10. Corpus: the 2 PDFs in `data/` (73 chunks).
+Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), frozen since 2026-11-10. Corpus: `data/Core_Java_Complete_Answers.pdf` (44 chunks). Note: `data/` also holds app uploads (`data/uploads/`), which `parse_folder` scans too; eval runs must exclude them.
 
 ### Misses (hybrid, with answers)
 
@@ -71,26 +71,26 @@ Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), froz
 | ID | Question | Gold rank | Top vector score | Cause |
 |----|----------|-----------|------------------|-------|
 | q03 | Which company acquired Sun Microsystems in 2010? | 1 | 0.511 | Below the 0.605 threshold, so refused before generation even though the right passage ranked first. |
-| q11 | What is the role of the finally block? | 2 | 0.544 | Below threshold. |
+| q11 | What is the role of the finally block? | 2 | 0.534 | Below threshold. |
 | q13 | What is encapsulation? | 2 | 0.542 | Below threshold. Short definition questions score low. |
 | q30 | What is a ResultSet? | 2 | 0.511 | Below threshold. |
 
 **Finding (2026-11-20).** On this set the top vector score does not separate answerable from unanswerable questions: the 4 refused answerable questions score 0.51–0.54, while the 2 hallucinated unanswerable ones score 0.62–0.69. No single threshold fixes both. Moving it lower trades false refusals for more hallucinations. Next steps to evaluate: drop the citation fallback for answers with no valid citation, add a reranker score as the not-found signal, and measure faithfulness and citation accuracy.
 
-Scores recomputed 2026-11-20 with the same corpus, embedding model, and query prefix (embedding the 73 chunks took 166 s on this machine).
+Scores recomputed 2026-11-20 with the same corpus (Java PDF only), embedding model, and query prefix.
 
 ### Experiment: citation fallback x not-found threshold (2026-11-20)
 
-One run of the hybrid pipeline (same config as above) with the threshold disabled during generation, so every question reached mistral. Each variant is scored on the same 40 answers: "fallback off" turns an answer with no model-written citation into "not found"; "threshold on" refuses when the top vector score is below 0.605.
+One run of the hybrid pipeline (same config and corpus as above; an earlier run that accidentally included an uploaded PDF gave the same conclusion) with the threshold disabled during generation, so every question reached mistral. Each variant is scored on the same 40 answers: "fallback off" turns an answer with no model-written citation into "not found"; "threshold on" refuses when the top vector score is below 0.605.
 
 | Citation fallback | Threshold 0.605 | Hallucination (of 10) | Answerable wrongly refused (of 30) |
 |---|---|---|---|
 | On | On (current app setting) | 2 (q32, q37) | 4 (q03, q11, q13, q30) |
 | On | Off | 7 | 0 |
-| Off | On | 0 | 22 |
-| Off | Off | 0 | 19 |
+| Off | On | 0 | 21 |
+| Off | Off | 1 (q34) | 18 |
 
-**Result: keep both on.** Dropping the fallback removes hallucinations but makes the system unusable, because mistral leaves out citations on most correct answers: the fallback was needed on 19 of 30 answerable questions (and on all 10 unanswerable ones). Turning the threshold off removes the 4 false refusals but lets 7 of 10 unanswerable questions through.
+**Result: keep both on.** Dropping the fallback removes hallucinations but makes the system unusable, because mistral leaves out citations on most correct answers: the fallback was needed on 18 of 30 answerable questions (and on 9 of 10 unanswerable ones). Turning the threshold off removes the 4 false refusals but lets 7 of 10 unanswerable questions through.
 
 **Other findings from the raw answers.**
 - mistral never returned the exact refusal string. When it declined it wrote variations such as "Not found in your documents. The provided chunks do not contain…" or "The capital of France is not found in your documents." (q35, q36, q40), and the fallback then attached a citation to them.

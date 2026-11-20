@@ -11,7 +11,7 @@ Status key: [ ] todo, [~] in progress, [x] done
 - [x] Choose embedding model
 - [x] Choose backend language and UI approach
 - [x] Set up repo, lint, and a basic test runner
-- [ ] Test local model speed on target hardware (go/no-go check) — informal: ~16–19 s per answer; not recorded in BENCHMARKS.md
+- [x] Test local model speed on target hardware (go/no-go check) — go: ~7 s per answer (14 s p95) on an RTX 3050 6 GB; see BENCHMARKS.md
 
 ## M1: One answer with a citation
 
@@ -46,7 +46,7 @@ Status key: [ ] todo, [~] in progress, [x] done
 
 - [ ] Run offline test and record in PRIVACY.md
 - [ ] Run deletion test
-- [ ] Run benchmarks and record in BENCHMARKS.md
+- [x] Run benchmarks and record in BENCHMARKS.md
 - [ ] Quantized vs. full-precision comparison
 - [ ] Setup under 15 minutes, verified by a clean run
 - [ ] Final README with results
