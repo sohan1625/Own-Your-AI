@@ -48,6 +48,33 @@ Report each on the same frozen set.
 
 | Date | Config | Recall@5 | MRR | Faithfulness | Hallucination | Notes |
 |------|--------|----------|-----|--------------|---------------|-------|
-| | | | | | | |
+| 2026-11-10 | Keyword only (BM25), top 20 | 1.00 | 0.769 | Not measured | Not measured | Recall@1 0.633, @3 0.867. Retrieval only. `eval/results_keyword.json` |
+| 2026-11-10 | Vector only (nomic-embed-text, cosine), top 20 | 1.00 | 0.790 | Not measured | Not measured | Recall@1 0.667, @3 0.900. Retrieval only. `eval/results_vector.json` |
+| 2026-11-10 | Hybrid (BM25 + vector, RRF k = 60), top 4 to mistral, not-found threshold 0.605 | 1.00 | 0.803 | Not measured | 20% (2 of 10) | Recall@1 0.633, @3 0.967. Meets the Recall@5 target; misses the hallucination target (< 10%). 4 of 30 answerable questions wrongly refused. `eval/results_hybrid.json` |
+| — | Hybrid + reranker | — | — | — | — | Not run yet |
 
-Record misses too, with a short explanation of the cause.
+Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), frozen since 2026-11-10. Corpus: the 2 PDFs in `data/` (73 chunks).
+
+### Misses (hybrid, with answers)
+
+**Retrieval.** All 30 answerable questions have a gold passage in the top 5. Eleven do not have it at rank 1 (q11, q13, q15, q16, q17, q18, q25, q29, q30 at rank 2; q12 at 3; q14 at 4). Fusion helps most at rank 3 (0.867 keyword → 0.967 hybrid) but not at rank 1.
+
+**Answers given to unanswerable questions (hallucination).**
+
+| ID | Question | Top vector score | Cause |
+|----|----------|------------------|-------|
+| q32 | How do you deploy a Java app to Kubernetes? | 0.622 | Score passes the 0.605 threshold (shares "Java" with the corpus); the model answered from general knowledge. The citation fallback in `src/answer.py` then attached the top chunk's citation, so the zero-citation check did not catch it. |
+| q37 | How do you set up PostgreSQL replication? | 0.685 | Same pattern: database wording is close to the JDBC chunks, so the threshold passed it, and the model answered from general knowledge with a fallback citation. |
+
+**Answerable questions wrongly refused.**
+
+| ID | Question | Gold rank | Top vector score | Cause |
+|----|----------|-----------|------------------|-------|
+| q03 | Which company acquired Sun Microsystems in 2010? | 1 | 0.511 | Below the 0.605 threshold, so refused before generation even though the right passage ranked first. |
+| q11 | What is the role of the finally block? | 2 | 0.544 | Below threshold. |
+| q13 | What is encapsulation? | 2 | 0.542 | Below threshold. Short definition questions score low. |
+| q30 | What is a ResultSet? | 2 | 0.511 | Below threshold. |
+
+**Finding (2026-11-20).** On this set the top vector score does not separate answerable from unanswerable questions: the 4 refused answerable questions score 0.51–0.54, while the 2 hallucinated unanswerable ones score 0.62–0.69. No single threshold fixes both. Moving it lower trades false refusals for more hallucinations. Next steps to evaluate: drop the citation fallback for answers with no valid citation, add a reranker score as the not-found signal, and measure faithfulness and citation accuracy.
+
+Scores recomputed 2026-11-20 with the same corpus, embedding model, and query prefix (embedding the 73 chunks took 166 s on this machine).

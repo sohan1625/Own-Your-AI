@@ -27,10 +27,10 @@ Status key: [ ] todo, [~] in progress, [x] done
 
 - [x] Add embeddings and vector search — nomic-embed-text, stored in PostgreSQL with pgvector
 - [x] Implement RRF fusion — `src/fuse.py`, k = 60; used by the app
-- [x] Implement "not found" threshold — 0.605 on the top vector score, from `eval/calibration.jsonl`
+- [x] Implement "not found" threshold — 0.605 on the top vector score, from `eval/calibration.jsonl` (on the eval set it refuses 4 answerable questions and passes 2 unanswerable ones; see EVAL.md)
 - [x] Freeze eval set — `eval/questions.jsonl` unchanged since 2026-11-10
 - [x] Run retrieval metrics for keyword, vector, and hybrid — `eval/results_*.json`
-- [ ] Record results in EVAL.md — results log is still empty
+- [x] Record results in EVAL.md — includes misses and their causes
 
 ## M3: Quality and management
 
