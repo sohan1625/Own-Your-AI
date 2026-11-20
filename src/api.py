@@ -36,7 +36,8 @@ CONFIG_PATH = ROOT / "config.toml"
 STATIC_INDEX = ROOT / "static" / "index.html"
 # uvicorn's own logger, so messages appear in the server output.
 logger = logging.getLogger("uvicorn.error")
-UPLOAD_DIR = ROOT / "data" / "uploads"
+# Outside data/, which holds the eval corpus that scripts/eval.py scans.
+UPLOAD_DIR = ROOT / "storage" / "uploads"
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 documents: dict[str, dict[str, Any]] = {}
 _bm25_index: dict[str, Any] | None = None
