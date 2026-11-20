@@ -102,7 +102,7 @@ class TestAnswerGeneration(unittest.TestCase):
         # Verify that the request was built with the correct URL and payload
         args, kwargs = mock_urlopen.call_args
         request = args[0]
-        self.assertTrue(request.full_url.startswith('http://localhost'))
+        self.assertTrue(request.full_url.startswith(('http://localhost', 'http://127.0.0.1')))
         payload = json.loads(request.data.decode('utf-8'))
         self.assertEqual(payload['model'], 'mistral')
         from src.answer import get_generation_top_k

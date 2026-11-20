@@ -26,7 +26,7 @@ not_found_threshold = 0.605
 
 [embedding]
 model = "nomic-embed-text"
-host = "http://localhost:11434"
+host = "http://127.0.0.1:11434"   # not "localhost": on Windows it tries IPv6 first, adding ~2 s per request
 search_query_prefix = "search_query: "
 search_document_prefix = "search_document: "
 
@@ -37,7 +37,7 @@ top_k = 4
 
 [ollama]
 model = "mistral"
-host = "http://localhost:11434"
+host = "http://127.0.0.1:11434"   # not "localhost": on Windows it tries IPv6 first, adding ~2 s per request
 
 
 [cache]

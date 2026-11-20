@@ -102,7 +102,7 @@ def embed_text(
     ollama_cfg = cfg.get("ollama", {})
 
     target_model = model or emb_cfg.get("model") or "nomic-embed-text"
-    target_host = host or emb_cfg.get("host") or ollama_cfg.get("host") or "http://localhost:11434"
+    target_host = host or emb_cfg.get("host") or ollama_cfg.get("host") or "http://127.0.0.1:11434"
 
     valid_host = _validate_host(target_host)
 
