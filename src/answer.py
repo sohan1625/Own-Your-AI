@@ -233,15 +233,21 @@ def generate_answer(
                 for c in chunks_to_use
             ]
             answer = normalize_answer(raw_response, chunk_ids)
-            if answer == "not found in your documents":
-                return answer
 
             passed_chunk_ids = [
                 chunk.get("chunk_id") or chunk.get("id")
                 for chunk in chunks
                 if chunk.get("chunk_id") or chunk.get("id")
             ]
-            if not any(f"[{chunk_id}]" in answer for chunk_id in passed_chunk_ids):
+            cites_a_chunk = any(f"[{chunk_id}]" in answer for chunk_id in passed_chunk_ids)
+            # The model often rewords its refusal ("Not found in your documents. The
+            # chunks do not ...", "X is not found in your documents."). Without a
+            # citation of its own, treat that as the refusal, so no fallback citation
+            # is attached. A cited partial answer that mentions a missing part is kept.
+            if not cites_a_chunk and "not found in your documents" in answer.lower():
+                return "not found in your documents"
+
+            if not cites_a_chunk:
                 top_chunk_id = None
                 if chunks:
                     top_chunk_id = chunks[0].get("chunk_id") or chunks[0].get("id")

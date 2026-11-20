@@ -240,6 +240,34 @@ class TestAnswerGeneration(unittest.TestCase):
 
         self.assertEqual(answer, "not found in your documents")
 
+    @patch('urllib.request.urlopen')
+    def test_reworded_refusal_becomes_exact_refusal_without_citation(self, mock_urlopen):
+        # Real mistral outputs from the eval set (q36, q35).
+        for response in (
+            "The capital of France is not found in your documents.",
+            "Not found in your documents. The provided chunks do not contain information "
+            "about the features in Python 3.12.",
+        ):
+            with self.subTest(response=response):
+                mock_response = MagicMock()
+                mock_response.read.return_value = json.dumps({"response": response}).encode('utf-8')
+                mock_urlopen.return_value.__enter__.return_value = mock_response
+
+                answer = generate_answer(self.question, self.sample_chunks)
+
+                self.assertEqual(answer, "not found in your documents")
+
+    @patch('urllib.request.urlopen')
+    def test_cited_partial_answer_mentioning_not_found_is_kept(self, mock_urlopen):
+        response = "Part one is covered here [c2]. Part two is not found in your documents."
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": response}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        answer = generate_answer(self.question, self.sample_chunks)
+
+        self.assertEqual(answer, response)
+
 if __name__ == '__main__':
     unittest.main()
 
