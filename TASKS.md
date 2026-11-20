@@ -4,14 +4,14 @@ Status key: [ ] todo, [~] in progress, [x] done
 
 ## Before coding
 
-- [ ] Write 30–50 eval questions from your own notes (EVAL.md)
+- [x] Write 30–50 eval questions from your own notes (EVAL.md) — 40 in `eval/questions.jsonl`
 - [x] Check laptop RAM and GPU (BENCHMARKS.md)
 - [x] Choose database and index store (DECISIONS.md)
 - [x] Choose local LLM runtime and model size
 - [x] Choose embedding model
 - [x] Choose backend language and UI approach
 - [x] Set up repo, lint, and a basic test runner
-- [ ] Test local model speed on target hardware (go/no-go check)
+- [ ] Test local model speed on target hardware (go/no-go check) — informal: ~16–19 s per answer; not recorded in BENCHMARKS.md
 
 ## M1: One answer with a citation
 
@@ -19,28 +19,28 @@ Status key: [ ] todo, [~] in progress, [x] done
 - [x] Implement chunker with size and overlap, unit tests
 - [x] Implement BM25 over chunks, unit tests
 - [x] Build keyword-only query path
-- [ ] Generate an answer from top chunks with chunk IDs
-- [ ] Map chunk IDs to file, page, and span
-- [ ] Demo one question end to end
+- [x] Generate an answer from top chunks with chunk IDs
+- [x] Map chunk IDs to file, page, and span
+- [x] Demo one question end to end (`scripts/demo.py`)
 
 ## M2: Hybrid retrieval and measurement
 
-- [ ] Add embeddings and vector search
-- [ ] Implement RRF fusion
-- [ ] Implement "not found" threshold
-- [ ] Freeze eval set
-- [ ] Run retrieval metrics for keyword, vector, and hybrid
-- [ ] Record results in EVAL.md
+- [x] Add embeddings and vector search — nomic-embed-text, stored in PostgreSQL with pgvector
+- [x] Implement RRF fusion — `src/fuse.py`, k = 60; used by the app
+- [x] Implement "not found" threshold — 0.605 on the top vector score, from `eval/calibration.jsonl`
+- [x] Freeze eval set — `eval/questions.jsonl` unchanged since 2026-11-10
+- [x] Run retrieval metrics for keyword, vector, and hybrid — `eval/results_*.json`
+- [ ] Record results in EVAL.md — results log is still empty
 
 ## M3: Quality and management
 
 - [ ] Add reranker; measure with and without
-- [ ] Faithfulness and citation evaluation
-- [ ] Incremental re-indexing by file hash
-- [ ] Deletion removes chunks, vectors, and index entries
+- [~] Faithfulness and citation evaluation — hallucination on unanswerable measured (hybrid 20%, target < 10%); faithfulness and citation validity not measured
+- [~] Incremental re-indexing by file hash — re-uploading an identical file is skipped; a changed file is added as a new document and the old version is not replaced
+- [x] Deletion removes chunks, vectors, and index entries — also removes cached answers and the stored PDF
 - [ ] Retrieval inspector view
-- [ ] Simple UI: query, answer, citations, document list
-- [ ] Draft README
+- [x] Simple UI: query, answer, citations, document list
+- [x] Draft README
 
 ## M4: Proof and packaging
 
@@ -54,9 +54,16 @@ Status key: [ ] todo, [~] in progress, [x] done
 - [ ] Write-up of what worked and what didn't
 - [ ] Write LIMITATIONS.md (scanned PDFs, tables, failure cases)
 
+## Built outside the plan
+
+- [x] PDF upload, document list, and delete from the UI
+- [x] Chats saved in PostgreSQL; sidebar with New chat and chat history
+- [x] Follow-up questions use the previous question for search and recent turns in the prompt
+- [x] Answer cache in PostgreSQL (repeat questions return in ~0.2 s instead of ~19 s)
+
 ## Later (v1.1+)
 
-- [ ] Conversation memory
+- [x] Conversation memory — chats persist; follow-ups use recent turns
 - [ ] Document summaries
-- [ ] Filters
+- [~] Filters — choose which documents to search; no other filters
 - [ ] Export Q&A as markdown
