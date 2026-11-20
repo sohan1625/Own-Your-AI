@@ -78,3 +78,22 @@ Set: `eval/questions.jsonl`, 40 questions (30 answerable, 10 unanswerable), froz
 **Finding (2026-11-20).** On this set the top vector score does not separate answerable from unanswerable questions: the 4 refused answerable questions score 0.51–0.54, while the 2 hallucinated unanswerable ones score 0.62–0.69. No single threshold fixes both. Moving it lower trades false refusals for more hallucinations. Next steps to evaluate: drop the citation fallback for answers with no valid citation, add a reranker score as the not-found signal, and measure faithfulness and citation accuracy.
 
 Scores recomputed 2026-11-20 with the same corpus, embedding model, and query prefix (embedding the 73 chunks took 166 s on this machine).
+
+### Experiment: citation fallback x not-found threshold (2026-11-20)
+
+One run of the hybrid pipeline (same config as above) with the threshold disabled during generation, so every question reached mistral. Each variant is scored on the same 40 answers: "fallback off" turns an answer with no model-written citation into "not found"; "threshold on" refuses when the top vector score is below 0.605.
+
+| Citation fallback | Threshold 0.605 | Hallucination (of 10) | Answerable wrongly refused (of 30) |
+|---|---|---|---|
+| On | On (current app setting) | 2 (q32, q37) | 4 (q03, q11, q13, q30) |
+| On | Off | 7 | 0 |
+| Off | On | 0 | 22 |
+| Off | Off | 0 | 19 |
+
+**Result: keep both on.** Dropping the fallback removes hallucinations but makes the system unusable, because mistral leaves out citations on most correct answers: the fallback was needed on 19 of 30 answerable questions (and on all 10 unanswerable ones). Turning the threshold off removes the 4 false refusals but lets 7 of 10 unanswerable questions through.
+
+**Other findings from the raw answers.**
+- mistral never returned the exact refusal string. When it declined it wrote variations such as "Not found in your documents. The provided chunks do not contain…" or "The capital of France is not found in your documents." (q35, q36, q40), and the fallback then attached a citation to them.
+- Several answers say the topic is "not explicitly mentioned in the provided chunks" and then answer from general knowledge anyway (q33, q38).
+
+**Next levers** (not the fallback): get the model to cite reliably (prompt examples or a model that follows citation instructions better), then retest dropping the fallback; or use a reranker score as the not-found signal instead of the raw vector score.
