@@ -226,6 +226,72 @@ def test_followup_retrieves_and_answers_with_recent_conversation(monkeypatch):
     )
 
     assert response["answer"].startswith("Transmission delay")
-    assert "Transmission Delay" in captured["retrieval_query"]
+    # Previous question expands the search; the previous answer does not.
+    assert captured["retrieval_query"] == "What are the different types of delays?\nExplain those."
     assert captured["question"] == "Explain those."
     assert captured["history"] == history
+
+
+def test_followup_search_is_not_buried_by_previous_answer(monkeypatch):
+    firewall = {
+        "chunk_id": "firewall",
+        "doc_id": "doc-1",
+        "text": "Explain Firewalls? A firewall is a network security device that "
+        "monitors incoming and outgoing traffic and accepts, rejects or drops it.",
+    }
+    osi = {
+        "chunk_id": "osi",
+        "doc_id": "doc-1",
+        "text": "The OSI model has seven layers. The TCP/IP model is a simplified "
+        "version of the OSI model with four layers.",
+    }
+    # Distractors share many words with the previous answer, but not with either question.
+    distractors = [
+        {
+            "chunk_id": f"tcp-ip-{number}",
+            "doc_id": "doc-1",
+            "text": "TCP/IP layers map onto each other; the simplified TCP/IP version "
+            "is discussed, though not explicitly mentioned, with TCP/IP layers.",
+        }
+        for number in range(3)
+    ]
+    history = [
+        {"role": "user", "content": "what is osi model"},
+        {
+            "role": "assistant",
+            "content": "The OSI model is not explicitly mentioned, but the TCP/IP model, "
+            "a simplified version of the OSI model, is discussed. The OSI model "
+            "layers and the TCP/IP model layers map onto each other.",
+        },
+    ]
+    captured = {}
+
+    monkeypatch.setattr(api.db, "list_documents", lambda: [{"id": "doc-1"}])
+    monkeypatch.setattr(api.db, "conversation_exists", lambda _: True)
+    monkeypatch.setattr(api.db, "get_conversation_messages", lambda _: history)
+    monkeypatch.setattr(api.db, "save_exchange", lambda *args: None)
+    index = api.build_bm25_index([firewall, osi, *distractors])
+    monkeypatch.setattr(api, "_get_bm25_index", lambda: index)
+    monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 2})
+    monkeypatch.setattr(api, "get_generation_top_k", lambda _: 2)
+
+    def generate(question, chunks, **kwargs):
+        captured["chunk_ids"] = [chunk["chunk_id"] for chunk in chunks]
+        return "A firewall monitors traffic. [firewall]"
+
+    monkeypatch.setattr(api, "generate_answer", generate)
+    monkeypatch.setattr(
+        api,
+        "resolve_citations",
+        lambda *_: type("CitationResult", (), {"valid_citations": []})(),
+    )
+
+    api.ask_question(
+        api.AskRequest(
+            question="explain firewalls",
+            doc_ids=["doc-1"],
+            conversation_id="conversation-1",
+        )
+    )
+
+    assert "firewall" in captured["chunk_ids"]

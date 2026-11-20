@@ -222,8 +222,12 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
     index = _get_bm25_index()
     top_n = get_retrieval_params(ROOT / "config.toml")["top_n"]
     selected_id_set = set(selected_ids)
+    # Expand follow-ups ("Explain those.") with the previous user question only.
+    # Earlier answers stay in the prompt, but are left out of the search: a long
+    # answer would outweigh the new question and bury the chunks it needs.
     retrieval_query = "\n".join(
-        [message["content"] for message in conversation_history] + [question]
+        [message["content"] for message in conversation_history if message["role"] == "user"]
+        + [question]
     )
     all_results = bm25_search(retrieval_query, index, top_n=len(index["chunks"]))
     ranked_chunks = [
