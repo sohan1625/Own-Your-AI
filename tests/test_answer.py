@@ -2,6 +2,8 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 import json
+import tempfile
+from pathlib import Path
 
 from src.answer import generate_answer, _build_prompt, _validate_host, normalize_answer, is_below_threshold
 
@@ -53,6 +55,25 @@ class TestAnswerGeneration(unittest.TestCase):
             "Do not describe related concepts unless the question asks for them.",
             prompt,
         )
+
+    def test_prompt_uses_history_only_to_resolve_references(self):
+        history = [
+            {"role": "user", "content": "What are the different types of delays?"},
+            {
+                "role": "assistant",
+                "content": "Transmission Delay, Propagation Delay, Queuing Delay, and Processing Delay.",
+            },
+        ]
+
+        prompt = _build_prompt("Explain those.", self.sample_chunks, history)
+
+        self.assertIn("Transmission Delay", prompt)
+        self.assertIn(
+            "reference resolution only; not a source of facts",
+            prompt,
+        )
+        self.assertIn("Use the provided chunks for factual answers", prompt)
+        self.assertIn("Question: Explain those.", prompt)
 
     def test_prompt_contains_square_bracket_citation_and_no_labels(self):
         """The prompt must use square-bracket citations."""
@@ -152,8 +173,9 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertFalse(answer_failed)
 
     def test_is_below_threshold_score_0_60(self):
-        """A score of 0.60 is not blocked while the threshold is disabled."""
-        self.assertFalse(is_below_threshold(0.60))
+        """A score of 0.60 is below the 0.605 threshold."""
+        self.assertTrue(is_below_threshold(0.60))
+        self.assertFalse(is_below_threshold(0.61))
 
     def test_is_below_threshold_score_0_61(self):
         """A score of 0.61 is not blocked while the threshold is disabled."""
@@ -166,7 +188,23 @@ class TestAnswerGeneration(unittest.TestCase):
         mock_response.read.return_value = json.dumps({"response": "Generated answer"}).encode('utf-8')
         mock_urlopen.return_value.__enter__.return_value = mock_response
 
-        result = generate_answer(self.question, self.sample_chunks, top_score=0.60)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                '[ollama]\n'
+                'host = "http://localhost:11434"\n'
+                'model = "mistral"\n'
+                '\n[generation]\n'
+                'top_k = 1\n'
+                '\n[thresholds]\n',
+                encoding="utf-8",
+            )
+            result = generate_answer(
+                self.question,
+                self.sample_chunks,
+                top_score=0.60,
+                config_path=config_path,
+            )
         self.assertEqual(result, "Generated answer [c1]")
         mock_urlopen.assert_called_once()
 

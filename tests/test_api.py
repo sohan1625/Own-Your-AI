@@ -1,59 +1,231 @@
+import importlib
+import os
+import uuid
 from pathlib import Path
 
+import psycopg
+import pytest
+from dotenv import dotenv_values
 from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from src import api
 
+ROOT = Path(__file__).resolve().parents[1]
 
-def test_upload_bundled_pdf_survives_cache_clear_without_readable_text_warning(
-    monkeypatch, tmp_path
-):
-    pdf_path = Path(__file__).resolve().parents[1] / "data" / "Core_Java_Complete_Answers.pdf"
-    monkeypatch.setattr(api, "DOCUMENT_INDEX_DIR", tmp_path)
-    monkeypatch.setattr(
-        api,
-        "build_chunk_embeddings",
-        lambda chunks, **kwargs: [[1.0] for _ in chunks],
-    )
-    monkeypatch.setattr(
-        api,
-        "vector_retrieve",
-        lambda question, chunks, vectors, top_n, **kwargs: [(chunks[0], 0.9)],
-    )
-    monkeypatch.setattr(
-        api,
-        "generate_answer",
-        lambda question, chunks, **kwargs: f"JVM runs bytecode [{chunks[0]['chunk_id']}]",
-    )
 
-    api.documents.clear()
-    with TestClient(api.app) as client:
-        response = client.post(
-            "/upload",
-            files={"file": (pdf_path.name, pdf_path.read_bytes(), "application/pdf")},
+@pytest.fixture
+def isolated_database(monkeypatch):
+    env_values = dotenv_values(ROOT / ".env")
+    example_values = dotenv_values(ROOT / ".env.example")
+    base_url = (
+        os.environ.get("DATABASE_URL")
+        or env_values.get("DATABASE_URL")
+        or example_values.get("DATABASE_URL")
+    )
+    if not base_url:
+        pytest.fail("Set DATABASE_URL in .env or .env.example to run PostgreSQL API tests.")
+
+    schema = f"test_{uuid.uuid4().hex}"
+    with psycopg.connect(base_url, autocommit=True) as connection:
+        connection.execute(
+            sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema))
         )
 
-    assert response.status_code == 200
-    result = response.json()
-    assert result["pages"] > 0
-    assert "detail" not in result
-    assert "The PDF contains no readable text." not in response.text
-    assert (tmp_path / f"{result['doc_id']}.json").is_file()
+    test_url = make_conninfo(base_url, options=f"-c search_path={schema}")
+    monkeypatch.setenv("DATABASE_URL", test_url)
+    try:
+        yield test_url
+    finally:
+        with psycopg.connect(base_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+            )
 
-    api.documents.clear()
+
+def _make_pdf(text: str) -> bytes:
+    escaped_text = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT /F1 14 Tf 50 740 Td ({escaped_text}) Tj ET".encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for object_number, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{object_number} 0 obj\n".encode("ascii"))
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        (
+            f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(pdf)
+
+
+def test_upload_ask_delete_and_restart_persisted_state(
+    isolated_database, monkeypatch, tmp_path
+):
+    upload_dir = tmp_path / "uploads"
+    monkeypatch.setattr(api, "UPLOAD_DIR", upload_dir)
+
+    def answer_with_citations(question, chunks, **kwargs):
+        filenames = {chunk["file"] for chunk in chunks}
+        assert filenames == {"alpha.pdf", "beta.pdf"}
+        first_id, second_id = (chunk["chunk_id"] for chunk in chunks)
+        return f"The shared fact is present in both files [{first_id}] [{second_id}]"
+
+    monkeypatch.setattr(api, "generate_answer", answer_with_citations)
+    pdfs = [
+        ("files", ("alpha.pdf", _make_pdf("The shared fact appears in alpha."), "application/pdf")),
+        ("files", ("beta.pdf", _make_pdf("The shared fact appears in beta."), "application/pdf")),
+    ]
+
     with TestClient(api.app) as client:
+        upload_response = client.post("/upload", files=pdfs)
+        assert upload_response.status_code == 200
+        uploaded = upload_response.json()["documents"]
+        assert len(uploaded) == 2
+        assert {document["filename"] for document in uploaded} == {"alpha.pdf", "beta.pdf"}
+        assert all(not document["already_indexed"] for document in uploaded)
+        assert {path.stem for path in upload_dir.glob("*.pdf")} == {
+            document["id"] for document in uploaded
+        }
+
         ask_response = client.post(
             "/ask",
-            json={"doc_id": result["doc_id"], "question": "What is the JVM?"},
+            json={
+                "question": "What is the shared fact?",
+                "doc_ids": [document["id"] for document in uploaded],
+            },
         )
+        assert ask_response.status_code == 200
+        answer = ask_response.json()
+        assert {citation["file"] for citation in answer["citations"]} == {
+            "alpha.pdf",
+            "beta.pdf",
+        }
 
-    assert ask_response.status_code == 200
-    assert "JVM runs bytecode" in ask_response.json()["answer"]
+        conversation_id = answer["conversation_id"]
+        messages = client.get(
+            f"/conversations/{conversation_id}/messages"
+        ).json()
+        assert [message["role"] for message in messages] == ["user", "assistant"]
+        assert messages[0]["content"] == "What is the shared fact?"
 
-    missing_response = client.post(
-        "/ask",
-        json={"doc_id": "00000000-0000-0000-0000-000000000000", "question": "What is the JVM?"},
+        removed_id = uploaded[0]["id"]
+        delete_response = client.delete(f"/documents/{removed_id}")
+        assert delete_response.status_code == 200
+        assert not (upload_dir / f"{removed_id}.pdf").exists()
+
+    with psycopg.connect(isolated_database) as connection:
+        chunk_count = connection.execute(
+            "SELECT count(*) FROM chunks WHERE doc_id = %s",
+            (uploaded[0]["id"],),
+        ).fetchone()[0]
+    assert chunk_count == 0
+
+    restarted_api = importlib.reload(api)
+    with TestClient(restarted_api.app) as client:
+        documents_response = client.get("/documents")
+        assert documents_response.status_code == 200
+        remaining_documents = documents_response.json()
+        assert len(remaining_documents) == 1
+        assert remaining_documents[0]["id"] == uploaded[1]["id"]
+
+        conversations_response = client.get("/conversations")
+        assert conversations_response.status_code == 200
+        assert conversations_response.json()[0]["id"] == conversation_id
+        messages_response = client.get(
+            f"/conversations/{conversation_id}/messages"
+        )
+        assert messages_response.status_code == 200
+        assert [message["content"] for message in messages_response.json()] == [
+            "What is the shared fact?",
+            answer["answer"],
+        ]
+
+
+def test_startup_error_explains_how_to_start_postgres(monkeypatch):
+    def database_is_unavailable():
+        raise psycopg.OperationalError("database is down")
+
+    monkeypatch.setattr(api.db, "connect", database_is_unavailable)
+    with pytest.raises(RuntimeError, match="Start Docker and the rag-pgvector container"), TestClient(api.app):
+        pass
+
+
+def test_followup_retrieves_and_answers_with_recent_conversation(monkeypatch):
+    history = [
+        {"role": "user", "content": "What are the different types of delays?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Transmission Delay, Propagation Delay, Queuing Delay, "
+                "and Processing Delay."
+            ),
+        },
+    ]
+    chunk = {
+        "chunk_id": "delay-definitions",
+        "doc_id": "doc-1",
+        "text": "Transmission delay is the time to put bits on a link.",
+    }
+    captured = {}
+
+    monkeypatch.setattr(api.db, "list_documents", lambda: [{"id": "doc-1"}])
+    monkeypatch.setattr(api.db, "conversation_exists", lambda _: True)
+    monkeypatch.setattr(api.db, "get_conversation_messages", lambda _: history)
+    monkeypatch.setattr(api.db, "save_exchange", lambda *args: None)
+    monkeypatch.setattr(api, "_get_bm25_index", lambda: {"chunks": [chunk]})
+    monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 5})
+    monkeypatch.setattr(api, "get_generation_top_k", lambda _: 1)
+
+    def search(query, index, top_n):
+        captured["retrieval_query"] = query
+        return [(chunk, 1.0)]
+
+    def generate(question, chunks, **kwargs):
+        captured["question"] = question
+        captured["history"] = kwargs["conversation_history"]
+        return "Transmission delay is the time to put bits on a link. [delay-definitions]"
+
+    monkeypatch.setattr(api, "bm25_search", search)
+    monkeypatch.setattr(api, "generate_answer", generate)
+    monkeypatch.setattr(
+        api,
+        "resolve_citations",
+        lambda *_: type("CitationResult", (), {"valid_citations": []})(),
     )
-    assert missing_response.status_code == 404
-    assert missing_response.json()["detail"] == "Document not found. Re-upload the PDF."
-    api.documents.clear()
+
+    response = api.ask_question(
+        api.AskRequest(
+            question="Explain those.",
+            doc_ids=["doc-1"],
+            conversation_id="conversation-1",
+        )
+    )
+
+    assert response["answer"].startswith("Transmission delay")
+    assert "Transmission Delay" in captured["retrieval_query"]
+    assert captured["question"] == "Explain those."
+    assert captured["history"] == history

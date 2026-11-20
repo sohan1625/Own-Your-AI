@@ -1,97 +1,141 @@
-"""Local FastAPI endpoints for uploading a PDF and asking grounded questions."""
+"""Local FastAPI endpoints for document upload and grounded conversations."""
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from io import BytesIO
-import json
-import os
-from pathlib import Path
-import tempfile
-from typing import Any
 import uuid
+from contextlib import asynccontextmanager
+from hashlib import sha256
+from io import BytesIO
+from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
 
+from src import db
 from src.answer import generate_answer, get_generation_top_k
 from src.chunk import chunk_page_records
 from src.cite import resolve_citations
-from src.index import bm25_search, build_bm25_index, build_chunk_embeddings
+from src.index import bm25_search, build_bm25_index
 from src.ingest import parse_pdf_file
-from src.retrieve import get_retrieval_params, vector_retrieve
-
+from src.retrieve import get_retrieval_params
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_INDEX = ROOT / "static" / "index.html"
+UPLOAD_DIR = ROOT / "data" / "uploads"
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-DOCUMENT_INDEX_DIR = ROOT / "data" / "index"
 documents: dict[str, dict[str, Any]] = {}
+_bm25_index: dict[str, Any] | None = None
 
-app = FastAPI(title="AI Chat")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _invalidate_document_cache()
+    db.initialize_database()
+    yield
+
+
+app = FastAPI(title="AI Chat", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
-    doc_id: str
     question: str
+    doc_ids: list[str] | None = None
+    conversation_id: str | None = None
 
 
-def _document_index_path(doc_id: str) -> Path | None:
+def _invalidate_document_cache(document_id: str | None = None) -> None:
+    global _bm25_index
+    if document_id is None:
+        documents.clear()
+    else:
+        documents.pop(document_id, None)
+    _bm25_index = None
+
+
+def _get_bm25_index() -> dict[str, Any]:
+    global _bm25_index
+    if _bm25_index is None:
+        chunks = db.get_chunks()
+        documents.clear()
+        for chunk in chunks:
+            documents.setdefault(chunk["doc_id"], {"chunks": []})["chunks"].append(chunk)
+        _bm25_index = build_bm25_index(chunks)
+    return _bm25_index
+
+
+def _upload_path(document_id: str) -> Path:
+    normalized_id = str(uuid.UUID(document_id))
+    return UPLOAD_DIR / f"{normalized_id}.pdf"
+
+
+async def _index_upload(file: UploadFile) -> dict[str, Any]:
+    saved_path: Path | None = None
+    persisted = False
     try:
-        normalized_id = str(uuid.UUID(doc_id))
-    except (ValueError, AttributeError):
-        return None
-    return DOCUMENT_INDEX_DIR / f"{normalized_id}.json"
+        filename = Path(file.filename or "").name
+        if not filename or not filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Choose a PDF file.")
 
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="PDF must be 25 MB or smaller.")
 
-def _load_document(doc_id: str) -> dict[str, Any] | None:
-    index_path = _document_index_path(doc_id)
-    if index_path is None or not index_path.is_file():
-        return None
+        file_hash = sha256(content).hexdigest()
+        existing = db.get_document_by_sha256(file_hash)
+        if existing is not None:
+            return {**existing, "already_indexed": True}
 
-    try:
-        with index_path.open("r", encoding="utf-8") as index_file:
-            stored = json.load(index_file)
-        bm25_index = stored["bm25_index"]
-        bm25_index["term_freqs"] = [
-            Counter(term_freqs) for term_freqs in bm25_index["term_freqs"]
-        ]
-        bm25_index["doc_freq"] = Counter(bm25_index["doc_freq"])
-        return {
-            "chunks": stored["chunks"],
-            "bm25_index": bm25_index,
-            "vectors": stored["vectors"],
-        }
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Stored document index could not be loaded.",
-        ) from exc
+        document_id = str(uuid.uuid4())
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        saved_path = _upload_path(document_id)
+        saved_path.write_bytes(content)
+        try:
+            pages = len(PdfReader(BytesIO(content)).pages)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not read PDF: {exc}") from exc
 
+        records = parse_pdf_file(saved_path, file_hash=file_hash)
+        for record in records:
+            record["file"] = filename
+        if not any(record.get("text", "").strip() for record in records):
+            raise HTTPException(status_code=400, detail="The PDF contains no readable text.")
 
-def _save_document(doc_id: str, document: dict[str, Any]) -> None:
-    index_path = _document_index_path(doc_id)
-    if index_path is None:
-        raise ValueError("Invalid document ID.")
+        chunks = chunk_page_records(records, config_path=ROOT / "config.toml")
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not split the PDF text into chunks.",
+            )
 
-    DOCUMENT_INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    temp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=DOCUMENT_INDEX_DIR,
-            suffix=".tmp",
-            delete=False,
-        ) as index_file:
-            temp_path = index_file.name
-            json.dump(document, index_file)
-        Path(temp_path).replace(index_path)
+        db.insert_document(
+            {
+                "id": document_id,
+                "filename": filename,
+                "sha256": file_hash,
+                "pages": pages,
+            },
+            chunks,
+        )
+        persisted = True
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"Could not index PDF: {exc}") from exc
     finally:
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
+        if saved_path is not None and not persisted:
+            saved_path.unlink(missing_ok=True)
+        await file.close()
+
+    _invalidate_document_cache()
+    return {
+        "id": document_id,
+        "filename": filename,
+        "sha256": file_hash,
+        "pages": pages,
+        "chunk_count": len(chunks),
+        "already_indexed": False,
+    }
 
 
 @app.get("/", include_in_schema=False)
@@ -100,116 +144,107 @@ def home() -> FileResponse:
 
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)) -> dict[str, Any]:
-    filename = Path(file.filename or "").name
-    if not filename or not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Choose a PDF file.")
+async def upload_pdfs(files: Annotated[list[UploadFile], File()]) -> dict[str, Any]:
+    return {"documents": [await _index_upload(file) for file in files]}
 
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="PDF must be 25 MB or smaller.")
 
+@app.get("/documents")
+def list_documents() -> list[dict[str, Any]]:
+    return db.list_documents()
+
+
+@app.delete("/documents/{document_id}")
+def remove_document(document_id: str) -> dict[str, bool]:
     try:
-        pages = len(PdfReader(BytesIO(content)).pages)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read PDF: {exc}") from exc
+        upload_path = _upload_path(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Document not found.") from exc
 
-    temp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
-            temp_file.write(content)
-            temp_path = temp_file.name
+    deleted = db.delete_document(document_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
 
-        records = parse_pdf_file(temp_path)
-        for record in records:
-            record["file"] = filename
-        if not any(record.get("text", "").strip() for record in records):
-            raise HTTPException(status_code=400, detail="The PDF contains no readable text.")
-
-        chunks = chunk_page_records(records, config_path=ROOT / "config.toml")
-        if not chunks:
-            raise HTTPException(status_code=400, detail="Could not split the PDF text into chunks.")
-
-        bm25_index = build_bm25_index(chunks)
-        vectors = build_chunk_embeddings(chunks, config_path=ROOT / "config.toml")
-        if not vectors or len(vectors) != len(chunks):
-            raise HTTPException(status_code=503, detail="Could not create embeddings for this PDF.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Could not index PDF: {exc}") from exc
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-        await file.close()
-
-    doc_id = str(uuid.uuid4())
-    document = {
-        "chunks": chunks,
-        "bm25_index": bm25_index,
-        "vectors": vectors,
-    }
-    try:
-        _save_document(doc_id, document)
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail=f"Could not save document index: {exc}") from exc
-    documents[doc_id] = document
-    return {"doc_id": doc_id, "pages": pages}
+    _invalidate_document_cache(document_id)
+    upload_path.unlink(missing_ok=True)
+    return {"deleted": True}
 
 
 @app.post("/ask")
 def ask_question(request: AskRequest) -> dict[str, Any]:
-    document = documents.get(request.doc_id)
-    if document is None:
-        document = _load_document(request.doc_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found. Re-upload the PDF.")
-        documents[request.doc_id] = document
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=422, detail="Question cannot be empty.")
 
-    chunks = document["chunks"]
+    available_documents = db.list_documents()
+    if request.doc_ids is None:
+        selected_ids = [document["id"] for document in available_documents]
+    else:
+        selected_ids = list(dict.fromkeys(request.doc_ids))
+        existing_ids = {document["id"] for document in available_documents}
+        missing_ids = [document_id for document_id in selected_ids if document_id not in existing_ids]
+        if missing_ids:
+            raise HTTPException(status_code=404, detail="One or more documents were not found.")
+    if not selected_ids:
+        raise HTTPException(status_code=400, detail="Select at least one document.")
+
+    conversation_id = request.conversation_id
+    conversation_history: list[dict[str, str]] = []
+    if conversation_id and not db.conversation_exists(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if conversation_id:
+        conversation_history = [
+            {"role": message["role"], "content": message["content"]}
+            for message in db.get_conversation_messages(conversation_id)[-2:]
+            if message["role"] in {"user", "assistant"}
+        ]
+
+    index = _get_bm25_index()
     top_n = get_retrieval_params(ROOT / "config.toml")["top_n"]
-    bm25_results = bm25_search(question, document["bm25_index"], top_n=top_n)
-    vector_results = vector_retrieve(
-        question,
-        chunks,
-        document["vectors"],
-        top_n=top_n,
-        config_path=ROOT / "config.toml",
+    selected_id_set = set(selected_ids)
+    retrieval_query = "\n".join(
+        [message["content"] for message in conversation_history] + [question]
     )
-
-    scores: dict[str, float] = defaultdict(float)
-    chunk_by_id: dict[str, dict[str, Any]] = {}
-    for ranked_list in (
-        [chunk for chunk, _ in bm25_results],
-        [chunk for chunk, _ in vector_results],
-    ):
-        for rank, chunk in enumerate(ranked_list, start=1):
-            chunk_id = chunk["chunk_id"]
-            scores[chunk_id] += 1.0 / (60 + rank)
-            chunk_by_id[chunk_id] = chunk
-
-    ranked_chunks = sorted(
-        chunk_by_id.values(),
-        key=lambda chunk: scores[chunk["chunk_id"]],
-        reverse=True,
-    )
+    all_results = bm25_search(retrieval_query, index, top_n=len(index["chunks"]))
+    ranked_chunks = [
+        chunk
+        for chunk, _ in all_results
+        if chunk["doc_id"] in selected_id_set
+    ][:top_n]
     generation_chunks = ranked_chunks[:get_generation_top_k(ROOT / "config.toml")]
-    top_vector_score = vector_results[0][1] if vector_results else None
     answer = generate_answer(
         question,
         generation_chunks,
-        top_score=top_vector_score,
+        conversation_history=conversation_history,
         config_path=ROOT / "config.toml",
     )
     citation_result = resolve_citations(answer, generation_chunks)
     citations = [
-        {"file": citation["file"], "page": citation["page"]}
+        {
+            "file": citation["file"],
+            "page": citation["page"],
+            "start_char": citation["start_char"],
+            "end_char": citation["end_char"],
+        }
         for citation in citation_result.valid_citations
     ]
-    return {"answer": answer, "citations": citations}
+
+    if conversation_id is None:
+        conversation_id = db.create_conversation(question[:120])
+    db.save_exchange(conversation_id, question, answer, citations)
+    return {
+        "answer": answer,
+        "citations": citations,
+        "conversation_id": conversation_id,
+    }
+
+
+@app.get("/conversations")
+def list_conversations() -> list[dict[str, Any]]:
+    return db.list_conversations()
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_conversation_messages(conversation_id: str) -> list[dict[str, Any]]:
+    if not db.conversation_exists(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return db.get_conversation_messages(conversation_id)

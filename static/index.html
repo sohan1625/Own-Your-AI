@@ -54,6 +54,80 @@
       letter-spacing: -0.02em;
     }
 
+    .library {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 4px 0 8px;
+    }
+
+    .library-section {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid rgba(31, 35, 43, .06);
+      border-radius: 15px;
+      background: #fff;
+    }
+
+    .library-section h2 {
+      margin: 0 0 7px;
+      color: #777d87;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .library-list {
+      display: grid;
+      max-height: 124px;
+      gap: 5px;
+      overflow-y: auto;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .document-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      color: #454a55;
+      font-size: 11px;
+    }
+
+    .document-row input { margin: 0; accent-color: #537b62; }
+    .document-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .delete-document {
+      padding: 3px 6px;
+      border: 0;
+      border-radius: 7px;
+      color: #8a5252;
+      background: #f8eeee;
+      font-size: 10px;
+      cursor: pointer;
+    }
+
+    .conversation-button {
+      width: 100%;
+      overflow: hidden;
+      padding: 5px 7px;
+      border: 0;
+      border-radius: 7px;
+      color: #555b66;
+      background: transparent;
+      font-size: 11px;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .conversation-button:hover, .conversation-button.active { background: #f1f2f5; }
+    .library-empty { color: #a0a4ad; font-size: 11px; }
+
     .round-button {
       width: 40px;
       height: 40px;
@@ -280,7 +354,7 @@
 <body>
   <main class="app">
     <header class="topbar">
-      <button class="round-button" id="clear-chat" type="button" aria-label="Clear chat">
+      <button class="round-button" id="clear-chat" type="button" aria-label="New chat">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M14.5 5.5 8 12l6.5 6.5M8.5 12H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -288,6 +362,17 @@
       <h1>AI Chat</h1>
       <span aria-hidden="true"></span>
     </header>
+
+    <div class="library">
+      <section class="library-section" aria-labelledby="documents-heading">
+        <h2 id="documents-heading">Documents</h2>
+        <ul class="library-list" id="document-list"></ul>
+      </section>
+      <section class="library-section" aria-labelledby="conversations-heading">
+        <h2 id="conversations-heading">Conversations</h2>
+        <ul class="library-list" id="conversation-list"></ul>
+      </section>
+    </div>
 
     <section class="feed" id="feed" aria-live="polite" aria-label="Conversation">
       <div class="empty-state" id="empty-state">
@@ -301,7 +386,7 @@
         <label class="visually-hidden" for="question">Ask about your PDF...</label>
         <textarea id="question" rows="2" placeholder="Ask about your PDF..."></textarea>
         <div class="composer-row">
-          <input class="visually-hidden" id="file-input" type="file" accept="application/pdf">
+          <input class="visually-hidden" id="file-input" type="file" accept="application/pdf" multiple>
           <button class="round-button upload-button" id="upload-button" type="button" aria-label="Upload a PDF">
             <span aria-hidden="true">+</span>
           </button>
@@ -326,8 +411,9 @@
       const uploadButton = document.querySelector("#upload-button");
       const sendButton = document.querySelector("#send-button");
       const documentPill = document.querySelector("#document-pill");
-      let docId = null;
-      let currentDocument = null;
+      const documentList = document.querySelector("#document-list");
+      const conversationList = document.querySelector("#conversation-list");
+      let currentConversationId = null;
       let waiting = false;
       let uploading = false;
 
@@ -385,6 +471,13 @@
         scrollToLatest();
       }
 
+      function clearFeed() {
+        for (const child of Array.from(feed.children)) {
+          if (child !== emptyState) child.remove();
+        }
+        refreshEmptyState();
+      }
+
       async function responseError(response) {
         try {
           const body = await response.json();
@@ -394,30 +487,148 @@
         }
       }
 
+      function selectedDocumentIds() {
+        return Array.from(documentList.querySelectorAll("input[type=checkbox]:checked"))
+          .map((checkbox) => checkbox.value);
+      }
+
+      function updateDocumentPill() {
+        const selected = selectedDocumentIds();
+        const hasDocuments = documentList.querySelector("input[type=checkbox]") !== null;
+        documentPill.textContent = selected.length
+          ? `${selected.length} document${selected.length === 1 ? "" : "s"} selected`
+          : hasDocuments ? "Select documents to ask" : "Upload a PDF to start";
+      }
+
+      async function loadDocuments() {
+        const response = await fetch("/documents");
+        if (!response.ok) throw new Error(await responseError(response));
+        const documents = await response.json();
+        documentList.replaceChildren();
+
+        if (documents.length === 0) {
+          const empty = document.createElement("li");
+          empty.className = "library-empty";
+          empty.textContent = "No documents yet";
+          documentList.append(empty);
+        }
+
+        for (const item of documents) {
+          const row = document.createElement("li");
+          row.className = "document-row";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = item.id;
+          checkbox.checked = true;
+          checkbox.setAttribute("aria-label", `Use ${item.filename}`);
+          checkbox.addEventListener("change", updateDocumentPill);
+
+          const name = document.createElement("span");
+          name.className = "document-name";
+          name.textContent = item.filename;
+          name.title = `${item.filename} · ${item.pages} pages`;
+
+          const deleteButton = document.createElement("button");
+          deleteButton.className = "delete-document";
+          deleteButton.type = "button";
+          deleteButton.textContent = "Delete";
+          deleteButton.setAttribute("aria-label", `Delete ${item.filename}`);
+          deleteButton.addEventListener("click", async () => {
+            deleteButton.disabled = true;
+            try {
+              const deleteResponse = await fetch(`/documents/${encodeURIComponent(item.id)}`, {
+                method: "DELETE"
+              });
+              if (!deleteResponse.ok) throw new Error(await responseError(deleteResponse));
+              await loadDocuments();
+            } catch (error) {
+              addSystemNote(error instanceof Error ? error.message : "The document could not be deleted.");
+              deleteButton.disabled = false;
+            }
+          });
+
+          row.append(checkbox, name, deleteButton);
+          documentList.append(row);
+        }
+        updateDocumentPill();
+      }
+
+      function renderConversations(conversations) {
+        conversationList.replaceChildren();
+        if (conversations.length === 0) {
+          const empty = document.createElement("li");
+          empty.className = "library-empty";
+          empty.textContent = "No conversations yet";
+          conversationList.append(empty);
+          return;
+        }
+
+        for (const conversation of conversations) {
+          const row = document.createElement("li");
+          const button = document.createElement("button");
+          button.className = "conversation-button";
+          if (conversation.id === currentConversationId) button.classList.add("active");
+          button.type = "button";
+          button.textContent = conversation.title;
+          button.title = conversation.title;
+          button.addEventListener("click", () => loadConversation(conversation.id));
+          row.append(button);
+          conversationList.append(row);
+        }
+      }
+
+      async function loadConversations() {
+        const response = await fetch("/conversations");
+        if (!response.ok) throw new Error(await responseError(response));
+        renderConversations(await response.json());
+      }
+
+      async function loadConversation(conversationId) {
+        try {
+          const response = await fetch(
+            `/conversations/${encodeURIComponent(conversationId)}/messages`
+          );
+          if (!response.ok) throw new Error(await responseError(response));
+          const messages = await response.json();
+          currentConversationId = conversationId;
+          clearFeed();
+          for (const message of messages) {
+            if (message.role === "user") addUserMessage(message.content);
+            else addAssistantMessage(message.content, message.citations);
+          }
+          await loadConversations();
+        } catch (error) {
+          addSystemNote(error instanceof Error ? error.message : "The conversation could not be loaded.");
+        }
+      }
+
       uploadButton.addEventListener("click", () => fileInput.click());
 
       fileInput.addEventListener("change", async () => {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) return;
+        const files = Array.from(fileInput.files || []);
+        if (files.length === 0) return;
 
         uploading = true;
         uploadButton.disabled = true;
-        documentPill.textContent = `Indexing ${file.name}…`;
+        documentPill.textContent = `Indexing ${files.length} file${files.length === 1 ? "" : "s"}…`;
         const formData = new FormData();
-        formData.append("file", file);
+        for (const file of files) formData.append("files", file);
 
         try {
           const response = await fetch("/upload", { method: "POST", body: formData });
           if (!response.ok) throw new Error(await responseError(response));
           const result = await response.json();
-          docId = result.doc_id;
-          currentDocument = file.name;
-          documentPill.textContent = `${file.name} · ${result.pages} pages`;
-          addSystemNote(`Ready. Ask a question about ${file.name}.`);
+          await loadDocuments();
+          for (const document of result.documents) {
+            addSystemNote(
+              document.already_indexed
+                ? `${document.filename} was already indexed.`
+                : `Ready. Added ${document.filename} (${document.pages} pages).`
+            );
+          }
         } catch (error) {
-          documentPill.textContent = currentDocument
-            ? `${currentDocument} · ready`
-            : "Upload a PDF to start";
+          updateDocumentPill();
           addSystemNote(error instanceof Error ? error.message : "The upload failed.");
         } finally {
           uploading = false;
@@ -431,8 +642,9 @@
         if (waiting || uploading) return;
         const question = textarea.value.trim();
         if (!question) return;
-        if (!docId) {
-          addSystemNote("Upload a PDF first.");
+        const docIds = selectedDocumentIds();
+        if (docIds.length === 0) {
+          addSystemNote("Select at least one document.");
           return;
         }
 
@@ -446,19 +658,19 @@
           const response = await fetch("/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ doc_id: docId, question })
+            body: JSON.stringify({
+              question,
+              doc_ids: docIds,
+              ...(currentConversationId ? { conversation_id: currentConversationId } : {})
+            })
           });
           if (!response.ok) {
-            const message = await responseError(response);
-            if (response.status === 404) {
-              docId = null;
-              currentDocument = null;
-              documentPill.textContent = "Upload a PDF to start";
-            }
-            throw new Error(message);
+            throw new Error(await responseError(response));
           }
           const result = await response.json();
+          currentConversationId = result.conversation_id;
           addAssistantMessage(result.answer, result.citations);
+          await loadConversations();
         } catch (error) {
           addSystemNote(error instanceof Error ? error.message : "The question failed.");
         } finally {
@@ -481,11 +693,15 @@
       });
 
       document.querySelector("#clear-chat").addEventListener("click", () => {
-        for (const child of Array.from(feed.children)) {
-          if (child !== emptyState) child.remove();
-        }
-        refreshEmptyState();
+        currentConversationId = null;
+        clearFeed();
+        loadConversations().catch((error) => {
+          addSystemNote(error instanceof Error ? error.message : "Conversations could not be loaded.");
+        });
       });
+
+      loadDocuments().catch((error) => addSystemNote(error.message));
+      loadConversations().catch((error) => addSystemNote(error.message));
     })();
   </script>
 </body>

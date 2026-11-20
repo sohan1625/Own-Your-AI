@@ -61,6 +61,7 @@ Options considered: SQLite + sqlite-vec; Postgres + pgvector; Qdrant (local).
 Decision: PostgreSQL with the pgvector extension, run locally in Docker.
 Reasons: Vectors, relational metadata, and full-text search in one system. Matches existing Postgres experience from the inventory project. Stronger resume signal and scales to multi-user later.
 Tradeoffs accepted: Needs Docker running, which is heavier on Windows than SQLite's single file. Postgres's built-in full-text ranking (ts_rank) is not BM25, so BM25 is implemented in our own code on top of stored term statistics, per D-002.
+Implementation note: PostgreSQL now stores document metadata, chunks, and chat history. Docker and the rag-pgvector container must be running for the application to start.
 
 ## D-006: Target platform is Windows
 Date: 2026-11-09

@@ -46,8 +46,9 @@ This file describes each stage, its inputs and outputs, and the parameters to tu
 
 ## 8. Answer generation
 
-- Prompt includes only the selected chunks, each labeled with an ID.
-- Instruction: answer only from the provided chunks; if they don't contain the answer, say so.
+- Prompt includes the recent conversation for resolving follow-up references and selected chunks, each labeled with an ID.
+- Conversation history is reference context only; factual claims must come from the provided chunks.
+- If the chunks don't contain the answer, say so.
 - Output must reference chunk IDs for each claim.
 
 ## 9. Citation
