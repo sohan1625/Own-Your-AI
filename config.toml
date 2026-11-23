@@ -43,3 +43,5 @@ host = "http://127.0.0.1:11434"   # not "localhost": on Windows it tries IPv6 fi
 
 [cache]
 enabled = true              # answer cache in PostgreSQL; false skips it entirely
+semantic = true             # second lookup after an exact miss: similar question, same documents
+semantic_threshold = 0.972  # cosine; chosen on eval/cache_pairs.jsonl (scripts/calibrate_cache.py): lowest value with zero near-miss false hits + 0.005
