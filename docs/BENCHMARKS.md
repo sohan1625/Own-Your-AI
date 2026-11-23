@@ -262,3 +262,30 @@ Caveats: the threshold was chosen on the same 40 pairs it is reported on, so zer
 Keep rule: the eval (`scripts/eval.py`) does not use the answer cache, so Recall@3, MRR, hallucination and wrongly refused are unchanged by construction (the eval was not re-run). Near-miss false-hit rate is 0 / 20 and the paraphrase hit rate is reported. Decision: **kept**.
 
 Checks: pytest 89 passed; offline check (online audit) 8 passed, 0 failed (exact repeat still served from cache, 0.14 s); deletion check 15 passed, 0 failed.
+
+### Combined branch (`exp/combined`, 2026-11-24)
+
+All five branches merged, with the settings in the summary table plus `[generation] max_tokens = 256` (Ollama `num_predict`). The cap was added after a combined-branch eval hung: with greedy decoding, mistral looped on q37 for 14 minutes (over 10,500 tokens) and Ollama kept going via context shift, because no limit was sent. The longest normal answer in the eval is 112 tokens (median 65).
+
+One run of `python scripts/eval.py --retriever hybrid --with-answers` (cold start, 3 min 16 s):
+
+| Metric | Result |
+|---|---|
+| Recall@1 / @3 / @5 | 0.6333 / 0.9667 / 1.0000 |
+| MRR | 0.8028 |
+| Hallucination (of 10) | 0.20 (q32, q37) |
+| Answerable wrongly refused (of 30) | 4 (q03, q11, q13, q30) |
+| Faithfulness (token overlap) | 61 / 82 sentences supported (0.7439); 21 of 28 answers fully supported |
+
+Single run; repeatability of full runs with the cold start was not re-measured. Retrieval-only checks with the switches on reproduce the branch results: `--retriever langchain` R@3 1.0000, MRR 0.8056; `[chunking] strategy = "semantic"` R@3 0.9667, MRR 0.8694.
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.6333, "recall_at_3": 0.9667, "recall_at_5": 1.0, "mrr": 0.8028,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 4,
+ "faithfulness_answers_checked": 28, "faithfulness_answers_fully_supported": 21,
+ "faithfulness_sentences_scored": 82, "faithfulness_sentences_supported": 61,
+ "faithfulness_sentences_uncited": 0, "faithfulness_sentence_rate": 0.7439}
+```
+
+Checks: pytest 116 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed (run before the cap; the cap only adds `num_predict` to the local request).
