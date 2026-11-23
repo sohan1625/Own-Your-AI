@@ -96,6 +96,31 @@ def get_generation_top_k(config_path: str | Path = "config.toml") -> int:
         return 1
 
 
+def get_generation_temperature(config_path: str | Path = "config.toml") -> float | None:
+    """Read ``temperature`` from ``[generation]``; ``None`` when unset (Ollama default)."""
+    try:
+        cfg = _load_config(config_path)
+    except Exception:
+        return None
+    value = cfg.get("generation", {}).get("temperature")
+    return None if value is None else float(value)
+
+
+def get_generation_max_tokens(config_path: str | Path = "config.toml") -> int | None:
+    """Read ``max_tokens`` from ``[generation]``; ``None`` when unset (no limit)."""
+    try:
+        cfg = _load_config(config_path)
+    except Exception:
+        return None
+    value = cfg.get("generation", {}).get("max_tokens")
+    if value is None:
+        return None
+    value = int(value)
+    if value <= 0:
+        raise ValueError("[generation] max_tokens must be a positive integer")
+    return value
+
+
 def is_below_threshold(top_vector_score: float, config_path: str | Path = "config.toml") -> bool:
     """Read not_found_threshold from [thresholds] and return True if top_vector_score < threshold."""
     try:
@@ -173,6 +198,25 @@ def normalize_answer(raw_text: str, chunk_ids: List[str]) -> str:
     return text.strip()
 
 
+def unload_model(config_path: str | Path = "config.toml") -> None:
+    """Ask the local Ollama server to unload the answer model now (``keep_alive: 0``).
+
+    Ollama's runner keeps a prompt cache (KV reuse) that outlives a request. How much of
+    a prompt is reused changes the batch boundaries used to compute the rest, which
+    changes the floating-point result enough to flip greedy (temperature 0) outputs.
+    Unloading clears that cache, so the next requests start from the same state.
+    """
+    cfg = _load_config(config_path)
+    ollama_cfg = cfg.get("ollama", {})
+    model = ollama_cfg.get("model") or os.getenv("OLLAMA_MODEL")
+    host = _validate_host(ollama_cfg.get("host") or os.getenv("OLLAMA_HOST") or "")
+    payload = json.dumps({"model": model, "keep_alive": 0}).encode("utf-8")
+    request = urllib.request.Request(f"{host}/api/generate", data=payload, method="POST")
+    request.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(request) as resp:
+        resp.read()
+
+
 def generate_answer(
     question: str,
     chunks: List[Dict[str, Any]],
@@ -218,7 +262,18 @@ def generate_answer(
         chunks_to_use,
         conversation_history=conversation_history,
     )
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    body: dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+    options: dict[str, Any] = {}
+    temperature = get_generation_temperature(config_path)
+    if temperature is not None:
+        options["temperature"] = temperature
+    # Greedy decoding can loop; without a cap Ollama keeps generating (context shift).
+    max_tokens = get_generation_max_tokens(config_path)
+    if max_tokens is not None:
+        options["num_predict"] = max_tokens
+    if options:
+        body["options"] = options
+    payload = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(f"{host}/api/generate", data=payload, method="POST")
     request.add_header("Content-Type", "application/json")
     try:

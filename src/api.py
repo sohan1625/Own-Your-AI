@@ -127,6 +127,52 @@ def _vector_ranking(query: str, doc_ids: list[str], top_n: int) -> list[tuple[st
         return []
 
 
+def _question_embedding(question: str) -> list[float] | None:
+    """Query embedding for the semantic cache, or None if the model is unavailable."""
+    try:
+        prefix = get_embedding_prefix("query", config_path=CONFIG_PATH)
+        return embed_text(question, prefix=prefix, config_path=CONFIG_PATH) or None
+    except Exception as exc:
+        logger.warning("Semantic cache skipped; could not embed the question: %s", exc)
+        return None
+
+
+def _retrieval_engine() -> str:
+    """``custom`` (src.index + src.fuse) or ``langchain`` (src/lc_retrieve.py)."""
+    with open(CONFIG_PATH, "rb") as config_file:
+        engine = tomllib.load(config_file).get("retrieval", {}).get("engine", "custom")
+    if engine not in {"custom", "langchain"}:
+        raise ValueError(f"[retrieval] engine must be 'custom' or 'langchain', not {engine!r}")
+    return engine
+
+
+def _langchain_ranking(
+    query: str,
+    index: dict[str, Any],
+    doc_ids: list[str],
+    top_n: int,
+    *,
+    fallback: list[str],
+) -> tuple[list[str], float | None]:
+    """Hybrid ranking through LangChain; keyword ranking ``fallback`` if it fails."""
+    try:
+        from src.lc_retrieve import LangChainHybrid
+
+        selected = set(doc_ids)
+        engine = LangChainHybrid(
+            [chunk for chunk in index["chunks"] if chunk["doc_id"] in selected],
+            doc_ids,
+            top_n=top_n,
+            rrf_k=get_rrf_k(CONFIG_PATH),
+            config_path=CONFIG_PATH,
+        )
+        chunks, top_score = engine.retrieve(query)
+        return [chunk["chunk_id"] for chunk in chunks], top_score
+    except Exception as exc:
+        logger.warning("LangChain retrieval unavailable; using keyword search only: %s", exc)
+        return fallback, None
+
+
 def _get_bm25_index() -> dict[str, Any]:
     global _bm25_index
     if _bm25_index is None:
@@ -276,11 +322,20 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
     # The cache key covers only the question and documents, so answers that depend
     # on earlier turns (follow-ups) are neither served from nor written to the cache.
     cache_key: str | None = None
+    question_embedding: list[float] | None = None
     if not conversation_history and cache.is_enabled(ROOT / "config.toml"):
         hashes_by_id = {document["id"]: document["sha256"] for document in available_documents}
         doc_hashes = {document_id: hashes_by_id[document_id] for document_id in selected_ids}
         cache_key = cache.make_key(question, doc_hashes)
         hit = cache.get(cache_key)
+        match = "exact" if hit is not None else None
+        semantic_on, semantic_threshold = cache.semantic_settings(ROOT / "config.toml")
+        if hit is None and semantic_on:
+            # Second check, only after an exact miss: same document set, similar question.
+            question_embedding = _question_embedding(question)
+            if question_embedding:
+                hit = cache.get_semantic(question_embedding, doc_hashes, semantic_threshold)
+                match = "semantic" if hit is not None else None
         if hit is not None:
             if conversation_id is None:
                 conversation_id = db.create_conversation(question[:120])
@@ -290,6 +345,7 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
                 "citations": hit["citations"],
                 "conversation_id": conversation_id,
                 "cached": True,
+                "cache_match": match,
             }
 
     index = _get_bm25_index()
@@ -312,7 +368,11 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
     # Hybrid: fuse the keyword and vector rankings with RRF. The best vector score
     # feeds the calibrated "not found" threshold in generate_answer.
     top_vector_score: float | None = None
-    if _retrieval_method() == "hybrid":
+    if _retrieval_method() == "hybrid" and _retrieval_engine() == "langchain":
+        ranked_ids, top_vector_score = _langchain_ranking(
+            retrieval_query, index, selected_ids, top_n, fallback=ranked_ids
+        )
+    elif _retrieval_method() == "hybrid":
         vector_results = _vector_ranking(retrieval_query, selected_ids, top_n)
         if vector_results:
             top_vector_score = vector_results[0][1]
@@ -346,12 +406,15 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
         conversation_id = db.create_conversation(question[:120])
     db.save_exchange(conversation_id, question, answer, citations)
     if cache_key is not None:
-        cache.store(cache_key, question, doc_hashes, answer, citations)
+        if question_embedding is None and cache.semantic_settings(ROOT / "config.toml")[0]:
+            question_embedding = _question_embedding(question)
+        cache.store(cache_key, question, doc_hashes, answer, citations, question_embedding)
     return {
         "answer": answer,
         "citations": citations,
         "conversation_id": conversation_id,
         "cached": False,
+        "cache_match": None,
     }
 
 

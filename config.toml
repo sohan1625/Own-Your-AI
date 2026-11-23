@@ -7,9 +7,12 @@ data_dir = "data"           # directory for document ingestion (watched folder)
 [chunking]
 chunk_size = 400      # tokens (default: 400, tuned on EVAL.md)
 overlap = 50           # tokens (default: 50, tuned on EVAL.md)
+strategy = "fixed"     # "fixed" (word windows above) or "semantic" (split at topic shifts between sentences)
+semantic_percentile = 10  # semantic only: new chunk where consecutive-sentence similarity < this percentile (chosen on eval/calibration.jsonl, scripts/calibrate_chunking.py)
 
 [retrieval]
 method = "hybrid"           # "hybrid" (BM25 + vector, fused with RRF) or "keyword" (BM25 only)
+engine = "custom"           # hybrid only: "custom" (src.index + src.fuse) or "langchain" (src/lc_retrieve.py: BM25Retriever + pgvector, EnsembleRetriever)
 top_n_per_retriever = 20    # default: 20 (candidates each for BM25 and vector search)
 
 [fusion]
@@ -33,6 +36,8 @@ search_document_prefix = "search_document: "
 
 [generation]
 top_k = 4
+temperature = 0           # greedy decoding, so repeated eval runs give the same answers
+max_tokens = 256          # answer length cap (Ollama num_predict); longest normal eval answer is 112 tokens, and greedy decoding looped past 10,000 tokens on q37 without it
 
 
 [ollama]
@@ -42,3 +47,5 @@ host = "http://127.0.0.1:11434"   # not "localhost": on Windows it tries IPv6 fi
 
 [cache]
 enabled = true              # answer cache in PostgreSQL; false skips it entirely
+semantic = true             # second lookup after an exact miss: similar question, same documents
+semantic_threshold = 0.972  # cosine; chosen on eval/cache_pairs.jsonl (scripts/calibrate_cache.py): lowest value with zero near-miss false hits + 0.005

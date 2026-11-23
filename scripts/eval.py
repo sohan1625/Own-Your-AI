@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
+import uuid
 from typing import Any, Dict, List, Optional
 
 # Ensure project root is on sys.path
@@ -31,9 +33,10 @@ from src.retrieve import (
     get_retrieval_params,
     load_config,
 )
-from src.answer import generate_answer, get_generation_top_k
+from src.answer import generate_answer, get_generation_top_k, unload_model
 import src.answer as answer_module
 from src.cite import resolve_citations
+from src.faithfulness import check_answer
 from scripts.demo import evaluate_citations_and_answer
 
 
@@ -118,6 +121,21 @@ def reciprocal_rank_fusion(
     return [chunk_map[k_val] for k_val in sorted_keys[:top_n]]
 
 
+_CHUNK_ID_NAMESPACE = uuid.UUID("6f1c2a3e-6b0e-4f1e-9d55-0c7e4a1b2c3d")
+
+
+def assign_stable_chunk_ids(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Replace random chunk IDs with IDs derived from file, page and character span.
+
+    Chunk IDs appear in the prompt, so random IDs make every run send a different
+    prompt and the answers cannot repeat even at temperature 0.
+    """
+    for chunk in chunks:
+        key = f"{Path(chunk.get('file', '')).name}|{chunk.get('page')}|{chunk.get('start_char')}|{chunk.get('end_char')}"
+        chunk["chunk_id"] = str(uuid.uuid5(_CHUNK_ID_NAMESPACE, key))
+    return chunks
+
+
 def run_evaluation(
     questions_path: str | Path = "eval/questions.jsonl",
     output_path: Optional[str | Path] = None,
@@ -127,10 +145,98 @@ def run_evaluation(
     retriever: str = "keyword",
     chunks: Optional[List[Dict[str, Any]]] = None,
     vectors: Optional[List[List[float]]] = None,
+    cold_start: bool = False,
 ) -> Dict[str, Any]:
-    """Run the evaluation harness over questions and return the results dictionary."""
-    if retriever not in ("keyword", "vector", "hybrid"):
-        raise ValueError(f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', or 'hybrid'.")
+    """Run the evaluation harness over questions and return the results dictionary.
+
+    ``cold_start`` unloads the answer model before the first question, so every run
+    starts with an empty Ollama prompt cache (see ``src.answer.unload_model``). The
+    command line turns it on by default.
+    """
+    if retriever not in ("keyword", "vector", "hybrid", "langchain"):
+        raise ValueError(
+            f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', 'hybrid', or 'langchain'."
+        )
+    if retriever == "langchain":
+        with langchain_store(chunks, vectors, config_path=config_path) as (lc_chunks, lc_vectors, doc_ids):
+            return _run_evaluation(
+                questions_path, output_path, with_answers, config_path, None, retriever,
+                lc_chunks, lc_vectors, doc_ids, cold_start,
+            )
+    return _run_evaluation(
+        questions_path, output_path, with_answers, config_path, bm25_index, retriever, chunks, vectors, None,
+        cold_start,
+    )
+
+
+@contextmanager
+def langchain_store(
+    chunks: Optional[List[Dict[str, Any]]],
+    vectors: Optional[List[List[float]]],
+    *,
+    config_path: str | Path = "config.toml",
+):
+    """Load the eval chunks and embeddings into a throwaway PostgreSQL schema.
+
+    The LangChain engine reads vectors through ``db.vector_search``, so the chunks
+    must be in the database. The schema is dropped afterwards; the main schema is
+    never touched.
+    """
+    import os
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    from src import db
+
+    if chunks is None:
+        chunks = assign_stable_chunk_ids(chunk_page_records(parse_folder(config_path=config_path), config_path=config_path))
+    if vectors is None:
+        vectors = build_chunk_embeddings(chunks, config_path=config_path)
+    base_url = os.environ["DATABASE_URL"]
+    schema = f"eval_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(base_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    os.environ["DATABASE_URL"] = make_conninfo(base_url, options=f"-c search_path={schema}")
+    try:
+        db.initialize_database()
+        doc_ids: List[str] = []
+        by_file: Dict[str, List[int]] = defaultdict(list)
+        for i, chunk in enumerate(chunks):
+            by_file[chunk["file"]].append(i)
+        for file_name, indexes in by_file.items():
+            doc_id = str(uuid.uuid5(_CHUNK_ID_NAMESPACE, f"doc|{Path(file_name).name}"))
+            db.insert_document(
+                {
+                    "id": doc_id,
+                    "filename": Path(file_name).name,
+                    "sha256": chunks[indexes[0]].get("file_hash") or doc_id,
+                    "pages": len({chunks[i]["page"] for i in indexes}),
+                },
+                [chunks[i] for i in indexes],
+                [vectors[i] for i in indexes],
+            )
+            doc_ids.append(doc_id)
+        yield chunks, vectors, doc_ids
+    finally:
+        os.environ["DATABASE_URL"] = base_url
+        with psycopg.connect(base_url, autocommit=True) as connection:
+            connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def _run_evaluation(
+    questions_path: str | Path,
+    output_path: Optional[str | Path],
+    with_answers: bool,
+    config_path: str | Path,
+    bm25_index: Optional[Dict[str, Any]],
+    retriever: str,
+    chunks: Optional[List[Dict[str, Any]]],
+    vectors: Optional[List[List[float]]],
+    doc_ids: Optional[List[str]],
+    cold_start: bool = False,
+) -> Dict[str, Any]:
 
     if output_path is None:
         output_path = f"eval/results_{retriever}.json"
@@ -143,7 +249,7 @@ def run_evaluation(
             chunks = bm25_index["chunks"]
         else:
             records = parse_folder(config_path=config_path)
-            chunks = chunk_page_records(records, config_path=config_path)
+            chunks = assign_stable_chunk_ids(chunk_page_records(records, config_path=config_path))
 
     # BM25 index built once if needed
     if bm25_index is None and retriever in ("keyword", "hybrid"):
@@ -159,6 +265,14 @@ def run_evaluation(
     rrf_k = get_rrf_k(config_path)
     retrieval_params = get_retrieval_params(config_path)
     top_n = retrieval_params["top_n"]
+    lc_engine = None
+    if retriever == "langchain":
+        from src.lc_retrieve import LangChainHybrid
+
+        lc_engine = LangChainHybrid(chunks, doc_ids or [], top_n=top_n, rrf_k=rrf_k, config_path=config_path)
+
+    if with_answers and cold_start:
+        unload_model(config_path)
 
     eval_results: List[Dict[str, Any]] = []
     answerable_count = 0
@@ -168,6 +282,12 @@ def run_evaluation(
     hits_at_5 = 0
     sum_reciprocal_rank = 0.0
     hallucination_count = 0
+    wrongly_refused_count = 0
+    faith_scored = 0
+    faith_supported = 0
+    faith_uncited = 0
+    faith_answers = 0
+    faith_answers_full = 0
 
     for q in questions:
         qid = q.get("id", "unknown")
@@ -190,6 +310,8 @@ def run_evaluation(
             vector_results = vector_retrieve(q_text, chunks, vectors, top_n=top_n, config_path=config_path)
             vector_chunks = [chunk for chunk, _ in vector_results]
             retrieved = reciprocal_rank_fusion([bm25_chunks, vector_chunks], k=rrf_k, top_n=top_n)
+        elif retriever == "langchain":
+            retrieved, lc_top_vector_score = lc_engine.retrieve(q_text)
 
         first_gold_rank = evaluate_retrieval_match(retrieved, gold_passages)
 
@@ -200,12 +322,16 @@ def run_evaluation(
 
         generated_answer: Optional[str] = None
         hallucinated: Optional[bool] = None
+        wrongly_refused: Optional[bool] = False if (with_answers and answerable) else None
+        faithfulness: Optional[Dict[str, Any]] = None
 
         if with_answers:
             top_k = get_generation_top_k(config_path=config_path)
             gen_chunks = retrieved[:top_k]
             top_vector_score: Optional[float] = None
-            if retriever == "hybrid" and vector_results:
+            if retriever == "langchain":
+                top_vector_score = lc_top_vector_score
+            elif retriever == "hybrid" and vector_results:
                 top_vector_score = vector_results[0][1]
             elif retriever == "vector" and scored_chunks:
                 top_vector_score = scored_chunks[0][1]
@@ -238,10 +364,23 @@ def run_evaluation(
             ans_text, _failed = evaluate_citations_and_answer(cit_res)
             generated_answer = ans_text
 
+            # Faithfulness is a separate metric; it never changes the answer.
+            if ans_text.strip().rstrip(".").strip().lower() != "not found in your documents":
+                faithfulness = check_answer(ans_text, gen_chunks)
+                faith_answers += 1
+                faith_scored += faithfulness["scored"]
+                faith_supported += faithfulness["supported"]
+                faith_uncited += faithfulness["uncited"]
+                if faithfulness["sentences"] and faithfulness["supported"] == len(faithfulness["sentences"]):
+                    faith_answers_full += 1
+
             if not answerable:
                 hallucinated = bool("not found in your documents" not in ans_text.lower())
                 if hallucinated:
                     hallucination_count += 1
+            elif ans_text.strip().rstrip(".").strip().lower() == "not found in your documents":
+                wrongly_refused = True
+                wrongly_refused_count += 1
 
         if answerable:
             answerable_count += 1
@@ -272,6 +411,8 @@ def run_evaluation(
             "status": status,
             "generated_answer": generated_answer,
             "hallucinated": hallucinated,
+            "wrongly_refused": wrongly_refused,
+            "faithfulness": faithfulness,
         })
 
     recall_1 = (hits_at_1 / answerable_count) if answerable_count else 0.0
@@ -292,6 +433,15 @@ def run_evaluation(
         "recall_at_5": round(recall_5, 4),
         "mrr": round(mrr, 4),
         "hallucination_rate": round(hallucination_rate, 4) if hallucination_rate is not None else None,
+        # Answerable questions answered with the refusal (threshold or model).
+        "answerable_wrongly_refused": wrongly_refused_count if with_answers else None,
+        # Token-overlap faithfulness over non-refusal answers (src/faithfulness.py).
+        "faithfulness_answers_checked": faith_answers if with_answers else None,
+        "faithfulness_answers_fully_supported": faith_answers_full if with_answers else None,
+        "faithfulness_sentences_scored": faith_scored if with_answers else None,
+        "faithfulness_sentences_supported": faith_supported if with_answers else None,
+        "faithfulness_sentences_uncited": faith_uncited if with_answers else None,
+        "faithfulness_sentence_rate": round(faith_supported / faith_scored, 4) if (with_answers and faith_scored) else None,
     }
 
     full_output = {
@@ -336,6 +486,14 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
         print(f"  Hallucination Rate:     {summary['hallucination_rate']:.4f}")
     else:
         print("  Hallucination Rate:     N/A (retrieval-only mode; use --with-answers to evaluate)")
+    if summary.get('answerable_wrongly_refused') is not None:
+        print(f"  Answerable refused:     {summary['answerable_wrongly_refused']}")
+    if summary.get('faithfulness_sentence_rate') is not None:
+        print(
+            f"  Faithfulness (overlap): {summary['faithfulness_sentence_rate']:.4f} of sentences "
+            f"({summary['faithfulness_sentences_supported']}/{summary['faithfulness_sentences_scored']}); "
+            f"{summary['faithfulness_answers_fully_supported']}/{summary['faithfulness_answers_checked']} answers fully supported"
+        )
     print()
 
 
@@ -343,9 +501,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run evaluation on questions.jsonl.")
     parser.add_argument(
         "--retriever",
-        choices=["keyword", "vector", "hybrid"],
+        choices=["keyword", "vector", "hybrid", "langchain"],
         default="keyword",
-        help="Retrieval strategy: keyword (default), vector, or hybrid.",
+        help="Retrieval strategy: keyword (default), vector, hybrid, or langchain (hybrid via LangChain).",
     )
     parser.add_argument(
         "--with-answers",
@@ -363,6 +521,12 @@ def main() -> None:
         help="Path to output results JSON file (default: eval/results_<retriever>.json).",
     )
     parser.add_argument(
+        "--warm-model",
+        action="store_true",
+        help="Do not unload the answer model first (faster, but answers can depend on "
+        "Ollama's prompt cache from earlier requests, so runs may not repeat).",
+    )
+    parser.add_argument(
         "--config",
         default="config.toml",
         help="Path to configuration TOML file.",
@@ -375,6 +539,7 @@ def main() -> None:
         with_answers=args.with_answers,
         config_path=args.config,
         retriever=args.retriever,
+        cold_start=not args.warm_model,
     )
     print_results_table(results)
 

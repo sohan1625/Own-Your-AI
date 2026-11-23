@@ -208,6 +208,60 @@ class TestAnswerGeneration(unittest.TestCase):
         self.assertEqual(result, "Generated answer [c1]")
         mock_urlopen.assert_called_once()
 
+    def _write_config(self, temp_dir, generation_extra=""):
+        config_path = Path(temp_dir) / "config.toml"
+        config_path.write_text(
+            '[ollama]\n'
+            'host = "http://127.0.0.1:11434"\n'
+            'model = "mistral"\n'
+            '\n[generation]\n'
+            'top_k = 1\n'
+            + generation_extra,
+            encoding="utf-8",
+        )
+        return config_path
+
+    @patch('urllib.request.urlopen')
+    def test_temperature_from_config_is_sent_in_options(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Answer [c1]"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(temp_dir, 'temperature = 0\n')
+            generate_answer(self.question, self.sample_chunks, config_path=config_path)
+        payload = json.loads(mock_urlopen.call_args[0][0].data.decode('utf-8'))
+        self.assertEqual(payload["options"], {"temperature": 0})
+
+    @patch('urllib.request.urlopen')
+    def test_no_options_when_temperature_unset(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Answer [c1]"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(temp_dir)
+            generate_answer(self.question, self.sample_chunks, config_path=config_path)
+        payload = json.loads(mock_urlopen.call_args[0][0].data.decode('utf-8'))
+        self.assertNotIn("options", payload)
+
+    @patch('urllib.request.urlopen')
+    def test_max_tokens_from_config_is_sent_as_num_predict(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Answer [c1]"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(temp_dir, 'temperature = 0\nmax_tokens = 256\n')
+            generate_answer(self.question, self.sample_chunks, config_path=config_path)
+        payload = json.loads(mock_urlopen.call_args[0][0].data.decode('utf-8'))
+        self.assertEqual(payload["options"], {"temperature": 0, "num_predict": 256})
+
+    def test_project_config_caps_answer_length(self):
+        from src.answer import get_generation_max_tokens
+        self.assertEqual(get_generation_max_tokens("config.toml"), 256)
+
+    def test_project_config_sets_temperature_zero(self):
+        from src.answer import get_generation_temperature
+        self.assertEqual(get_generation_temperature("config.toml"), 0.0)
+
     @patch('urllib.request.urlopen')
     def test_generate_answer_appends_top_chunk_id_when_citation_is_missing(self, mock_urlopen):
         mock_response = MagicMock()
@@ -335,3 +389,26 @@ class TestNormalizeAnswer(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestUnloadModel(unittest.TestCase):
+    @patch('urllib.request.urlopen')
+    def test_unload_sends_keep_alive_zero_to_local_host(self, mock_urlopen):
+        from src.answer import unload_model
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text('[ollama]\nhost = "http://127.0.0.1:11434"\nmodel = "mistral"\n', encoding="utf-8")
+            unload_model(config_path)
+        request = mock_urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/generate")
+        self.assertEqual(json.loads(request.data.decode("utf-8")), {"model": "mistral", "keep_alive": 0})
+
+    @patch('urllib.request.urlopen')
+    def test_unload_refuses_non_local_host(self, mock_urlopen):
+        from src.answer import unload_model
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text('[ollama]\nhost = "http://example.com:11434"\nmodel = "mistral"\n', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                unload_model(config_path)
+        mock_urlopen.assert_not_called()
