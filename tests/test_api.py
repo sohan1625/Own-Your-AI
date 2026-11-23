@@ -199,6 +199,8 @@ def test_followup_retrieves_and_answers_with_recent_conversation(monkeypatch):
     monkeypatch.setattr(api, "_get_bm25_index", lambda: {"chunks": [chunk]})
     monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 5})
     monkeypatch.setattr(api, "_vector_ranking", lambda *args: [])
+    # Engine-independent behaviour; keep the custom engine so no real database is queried.
+    monkeypatch.setattr(api, "_retrieval_engine", lambda: "custom")
     monkeypatch.setattr(api, "get_generation_top_k", lambda _: 1)
 
     def search(query, index, top_n):
@@ -275,6 +277,8 @@ def test_followup_search_is_not_buried_by_previous_answer(monkeypatch):
     monkeypatch.setattr(api, "_get_bm25_index", lambda: index)
     monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 2})
     monkeypatch.setattr(api, "_vector_ranking", lambda *args: [])
+    # Engine-independent behaviour; keep the custom engine so no real database is queried.
+    monkeypatch.setattr(api, "_retrieval_engine", lambda: "custom")
     monkeypatch.setattr(api, "get_generation_top_k", lambda _: 2)
 
     def generate(question, chunks, **kwargs):
@@ -310,3 +314,41 @@ def test_home_page_is_revalidated_and_uses_no_native_dialogs():
     for call in ("confirm(", "alert(", "prompt("):
         assert call not in page
     assert 'deleteButton.textContent = "Delete?"' in page
+
+
+def test_self_contained_followup_is_answered_without_previous_answer(monkeypatch):
+    """A question that names its subject gets no history, so the model can't copy its last answer."""
+    history = [
+        {"role": "user", "content": "What are all the different normalizations?"},
+        {"role": "assistant", "content": "1NF, 2NF, 3NF and 4NF."},
+    ]
+    chunk = {"chunk_id": "nf", "doc_id": "doc-1", "text": "1NF removes duplicate columns."}
+    captured = {}
+    monkeypatch.setattr(api.db, "list_documents", lambda: [{"id": "doc-1"}])
+    monkeypatch.setattr(api.db, "conversation_exists", lambda _: True)
+    monkeypatch.setattr(api.db, "get_conversation_messages", lambda _: history)
+    monkeypatch.setattr(api.db, "save_exchange", lambda *args: None)
+    monkeypatch.setattr(api, "_get_bm25_index", lambda: {"chunks": [chunk]})
+    monkeypatch.setattr(api, "get_retrieval_params", lambda _: {"top_n": 5})
+    monkeypatch.setattr(api, "_retrieval_engine", lambda: "custom")
+    monkeypatch.setattr(api, "_vector_ranking", lambda *args: [])
+    monkeypatch.setattr(api, "get_generation_top_k", lambda _: 1)
+
+    def search(query, index, top_n):
+        captured["retrieval_query"] = query
+        return [(chunk, 1.0)]
+
+    def generate(question, chunks, **kwargs):
+        captured["history"] = kwargs["conversation_history"]
+        return "1NF removes duplicate columns. [nf]"
+
+    monkeypatch.setattr(api, "bm25_search", search)
+    monkeypatch.setattr(api, "generate_answer", generate)
+    monkeypatch.setattr(api, "resolve_citations", lambda *_: type("R", (), {"valid_citations": []})())
+
+    api.ask_question(api.AskRequest(question="explain all the normalizations", doc_ids=["doc-1"],
+                                    conversation_id="conversation-1"))
+
+    assert captured["history"] is None
+    # The search still uses the previous question.
+    assert captured["retrieval_query"] == "What are all the different normalizations?\nexplain all the normalizations"

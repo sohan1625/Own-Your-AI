@@ -74,6 +74,16 @@ class TestAnswerGeneration(unittest.TestCase):
         )
         self.assertIn("Use the provided chunks for factual answers", prompt)
         self.assertIn("Question: Explain those.", prompt)
+        self.assertIn("It may include an earlier answer: do not repeat it.", prompt)
+
+    def test_needs_conversation_history(self):
+        from src.answer import needs_conversation_history
+        for question in ("Explain those.", "explain it", "When is it used?", "What types are there?",
+                         "why?", "and 2NF?", "Tell me more about them"):
+            self.assertTrue(needs_conversation_history(question), question)
+        for question in ("explain all the normalizations", "What is a primary key in SQL?",
+                         "What are all the different normalizations?"):
+            self.assertFalse(needs_conversation_history(question), question)
 
     def test_prompt_contains_square_bracket_citation_and_no_labels(self):
         """The prompt must use square-bracket citations."""
