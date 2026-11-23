@@ -87,8 +87,8 @@ All five features are combined on `exp/combined`, each behind a config switch. D
 | Exp | Feature | Switch (value on `exp/combined`) | Decision | Branch |
 |---|---|---|---|---|
 | 0 | Temperature 0 + repeatable eval (model unloaded before each run) | `[generation] temperature = 0`; eval `--warm-model` to skip the unload | kept | `exp/temperature-zero` |
-| 1 | Semantic chunking | `[chunking] strategy = "fixed"` (set `"semantic"` to use) | discarded* | `exp/semantic-chunking` |
-| 2 | LangChain retrieval (BM25Retriever + pgvector, EnsembleRetriever) | `[retrieval] engine = "custom"` (set `"langchain"` to use) | discarded* | `exp/langchain-retrieval` |
+| 1 | Semantic chunking | `[chunking] strategy = "semantic"` (default since 2026-11-24) | discarded*, then turned on | `exp/semantic-chunking` |
+| 2 | LangChain retrieval (BM25Retriever + pgvector, EnsembleRetriever) | `[retrieval] engine = "langchain"` (default since 2026-11-24) | discarded*, then turned on | `exp/langchain-retrieval` |
 | 3 | Faithfulness metric (token overlap per sentence) | always reported by `scripts/eval.py --with-answers` | discarded* (measurement only) | `exp/faithfulness` |
 | 4 | Semantic answer cache | `[cache] semantic = true`, `semantic_threshold = 0.972` | kept | `exp/semantic-cache` |
 
@@ -289,3 +289,27 @@ Single run; repeatability of full runs with the cold start was not re-measured. 
 ```
 
 Checks: pytest 116 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed (run before the cap; the cap only adds `num_predict` to the local request).
+
+### Semantic chunking and LangChain retrieval on by default (2026-11-24)
+
+Both switched on: `[chunking] strategy = "semantic"`, `[retrieval] engine = "langchain"`. Fixes made while turning them on:
+
+- Both features called the embedding model through their own imports, so the tests' fake embeddings did not reach them and an upload with semantic chunking failed outright when Ollama was down. Uploads and LangChain queries now embed through the app's embedding function (`src.api`), and semantic chunking falls back to fixed windows if embedding fails (same degradation as before: keyword search still works).
+- Tests that check the from-scratch engine or fixed chunking now pin those settings instead of reading `config.toml`. With every real Ollama call blocked, all 121 tests pass, so they still need no model server.
+- New `python -m scripts.rechunk` rebuilds the chunks and embeddings of already-uploaded documents with the current settings (chat history kept, their cached answers cleared). The stored eval PDF was re-chunked: 44 → 92 chunks, all embedded.
+
+One run of `python scripts/eval.py --retriever langchain --with-answers` with semantic chunks (cold start, 4 min 8 s), next to the default-config run of the combined branch:
+
+| Metric | Fixed + custom engine | Semantic + LangChain |
+|---|---|---|
+| Recall@1 / @3 / @5 | 0.6333 / 0.9667 / 1.0000 | **0.8333** / 0.9667 / 1.0000 |
+| MRR | 0.8028 | **0.9011** |
+| Hallucination (of 10) | 0.20 (q32, q37) | 0.20 (q32, q37) |
+| Answerable wrongly refused (of 30) | 4 (q03, q11, q13, q30) | **2** (q03, q13) |
+| Faithfulness, all non-refusal answers | 61 / 82 (0.7439) | 35 / 59 (0.5932) |
+| Faithfulness, answerable questions | 47 / 54 (0.87) | 35 / 47 (0.745) |
+| Answers fully supported | 21 / 28 | 21 / 30 |
+
+Against the keep rule (Recall@3 and MRR not lower, hallucination and wrongly refused not higher) the combination passes. Faithfulness drops on answerable questions: with 92 smaller chunks an answer often draws on neighbouring chunks but cites one (q24 deadlock cites a chunk without the definition; q17, q20 similar), so citations are less specific. Single run each.
+
+Checks: pytest 121 passed (also with real Ollama calls blocked); offline check (online audit) 8 passed, 0 failed, no outbound connections with LangChain loaded (in one run the follow-up was answered "not found"; rerun answered it, and a direct comparison gave the same retrieval score and answer with both engines, so that was answer variance); deletion check 15 passed, 0 failed.

@@ -88,6 +88,8 @@ def test_ask_fuses_keyword_and_vector_results(client, monkeypatch):
         "Packet filtering devices guard a network perimeter.",
     )
     chunk_ids = _chunk_ids_by_doc(client)
+    # This test covers the custom engine's fusion (src.fuse), whatever config.toml selects.
+    monkeypatch.setattr(api, "_retrieval_engine", lambda: "custom")
     # Vector search finds a chunk that shares no words with the question.
     monkeypatch.setattr(
         api,

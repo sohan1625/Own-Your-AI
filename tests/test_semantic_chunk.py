@@ -115,12 +115,12 @@ def test_empty_pages_produce_no_chunks(tmp_path):
 
 
 def test_strategy_switch(tmp_path, monkeypatch):
-    assert get_chunking_strategy("config.toml") == "fixed"
+    assert get_chunking_strategy("config.toml") == "semantic"
     import src.chunk as chunk_module
 
     called = {}
 
-    def fake_semantic(records, *, config_path):
+    def fake_semantic(records, *, config_path, **kwargs):
         called["yes"] = True
         return []
 
@@ -132,3 +132,23 @@ def test_strategy_switch(tmp_path, monkeypatch):
     bad.write_text('[chunking]\nstrategy = "magic"\n', encoding="utf-8")
     with pytest.raises(ValueError):
         get_chunking_strategy(bad)
+
+
+def test_falls_back_to_fixed_chunks_when_embedding_fails(tmp_path):
+    def embedding_down(text):
+        raise OSError("connection refused")
+
+    records = [{"file": "doc.pdf", "page": 1, "text": "The cat sleeps. The car drives.", "file_hash": "h"}]
+    chunks = chunk_page_records(records, config_path=_config(tmp_path), embed=embedding_down)
+    assert [c["text"] for c in chunks] == ["The cat sleeps. The car drives."]
+    _assert_spans_exact(chunks, records)
+
+
+def test_upload_chunks_with_the_app_embedder(tmp_path, monkeypatch):
+    """Uploads pass the app's embedding function, so tests and fallbacks cover it."""
+    from src import api
+
+    calls = []
+    monkeypatch.setattr(api, "embed_text", lambda text, **kw: calls.append(kw["prefix"]) or topic_embed(text))
+    assert api._embed_document_text("The cat sleeps.") == topic_embed("The cat sleeps.")
+    assert calls == ["search_document: "]

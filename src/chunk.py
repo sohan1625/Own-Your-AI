@@ -16,6 +16,7 @@ chunks are produced.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import uuid
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, List, Mapping
 
 import tomllib
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration helpers (mirrored from src.ingest to avoid circular imports)
@@ -88,10 +91,21 @@ def chunk_page_records(
     page_records: Iterable[Mapping[str, Any]],
     *,
     config_path: str | Path = "config.toml",
+    embed: Callable[[str], List[float]] | None = None,
 ) -> List[dict[str, Any]]:
-    """Chunk pages with the strategy set in ``[chunking] strategy`` (default ``fixed``)."""
+    """Chunk pages with the strategy set in ``[chunking] strategy`` (default ``fixed``).
+
+    ``embed`` (semantic only) embeds one sentence; by default the local embedding
+    model is called with the document prefix. If embedding fails (for example the
+    model server is down), the pages are chunked with the fixed strategy instead, so
+    a document can still be indexed and searched by keyword.
+    """
+    page_records = list(page_records)
     if get_chunking_strategy(config_path) == "semantic":
-        return semantic_chunk_page_records(page_records, config_path=config_path)
+        try:
+            return semantic_chunk_page_records(page_records, config_path=config_path, embed=embed)
+        except OSError as exc:
+            logger.warning("Semantic chunking unavailable (%s); using fixed chunks.", exc)
     return _fixed_chunks(page_records, config_path=config_path)
 
 

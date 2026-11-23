@@ -127,6 +127,16 @@ def _vector_ranking(query: str, doc_ids: list[str], top_n: int) -> list[tuple[st
         return []
 
 
+def _embed_query_text(text: str) -> list[float]:
+    prefix = get_embedding_prefix("query", config_path=CONFIG_PATH)
+    return embed_text(text, prefix=prefix, config_path=CONFIG_PATH)
+
+
+def _embed_document_text(text: str) -> list[float]:
+    prefix = get_embedding_prefix("document", config_path=CONFIG_PATH)
+    return embed_text(text, prefix=prefix, config_path=CONFIG_PATH)
+
+
 def _question_embedding(question: str) -> list[float] | None:
     """Query embedding for the semantic cache, or None if the model is unavailable."""
     try:
@@ -165,6 +175,7 @@ def _langchain_ranking(
             top_n=top_n,
             rrf_k=get_rrf_k(CONFIG_PATH),
             config_path=CONFIG_PATH,
+            embed_query=_embed_query_text,
         )
         chunks, top_score = engine.retrieve(query)
         return [chunk["chunk_id"] for chunk in chunks], top_score
@@ -221,7 +232,7 @@ async def _index_upload(file: UploadFile) -> dict[str, Any]:
         if not any(record.get("text", "").strip() for record in records):
             raise HTTPException(status_code=400, detail="The PDF contains no readable text.")
 
-        chunks = chunk_page_records(records, config_path=ROOT / "config.toml")
+        chunks = chunk_page_records(records, config_path=CONFIG_PATH, embed=_embed_document_text)
         if not chunks:
             raise HTTPException(
                 status_code=400,
