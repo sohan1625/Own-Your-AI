@@ -108,3 +108,17 @@ Decision: **kept**. No metric got worse. Exp 0 run 1 is the baseline for Exp 1 t
 ```
 
 Checks: pytest 80 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 0 follow-up: why q37 flipped, and an eval fix (2026-11-23)
+
+Five runs of the unchanged Exp 0 eval (instrumented, no code changed) were identical in every metric and every answer: Recall@1 0.6333, Recall@3 0.9667, Recall@5 1.0000, MRR 0.8028, hallucination 0.20 (q32, q37), 4 answerable wrongly refused. q37 hallucinated in all five with the same uncited answer (the fallback citation is chunk `48f89474`).
+
+Cause: **Ollama's prompt cache**, not sampling, retrieval or the threshold.
+- Sampling: the runner log shows `temp = 0.000` and a `greedy` sampler for every request, so no seed is involved.
+- Retrieval: chunk embeddings, query embeddings, BM25 and vector top-5 scores, and the 4 chunks sent to mistral were identical in all runs; no top-5 near-ties (< 1e-6).
+- Threshold: q37's top vector score is 0.6853, 0.080 above 0.605, identical in every run.
+- Prompt cache: the llama-server runner reuses the longest cached prefix of a prompt, from the previous request or from a RAM prompt cache that keeps earlier prompts (including those from earlier eval runs), and recomputes the rest. q37's identical 1996-token prompt was served with 130, 1540 and 1995 tokens reused in different runs, and produced 528-, 530-, 512- and 391-token answers. Batch boundaries change the floating-point result enough to change greedy output. None of the long q37 answers cites a chunk, so the outcome depends on whether the answer happens to contain "not found in your documents" (→ refusal) or not (→ fallback citation → hallucination). The five identical runs above were identical only because every prompt was already fully cached.
+- `cache_prompt: false` (top-level or in `options`) is not honored by Ollama: 1995 tokens were still reused.
+- With the model unloaded first (`keep_alive: 0`), q37's prompt was computed from token 0 in 512-token batches and gave the same 528-token answer twice.
+
+Fix (eval only, on `exp/temperature-zero`): `scripts/eval.py` unloads the answer model before the first question (`src.answer.unload_model`, a `keep_alive: 0` request to the local Ollama), so each run starts from an empty prompt cache and sends the same sequence of requests. `--warm-model` skips it. The app is unchanged. A five-run confirmation of the fixed eval was started and stopped before any run finished, so reproducibility of full runs with the fix is not yet measured. Exp 1–3 decisions were not re-checked.

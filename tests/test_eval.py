@@ -140,6 +140,16 @@ class TestEvalHarness(unittest.TestCase):
         flags = {q["id"]: q["wrongly_refused"] for q in results["questions"]}
         self.assertEqual(flags, {"fx01": False, "fx02": True, "fx03": None})
 
+    @patch("scripts.eval.unload_model")
+    @patch("scripts.eval.generate_answer", return_value="not found in your documents")
+    def test_cold_start_unloads_model_once_only_when_asked(self, _gen, mock_unload):
+        run_evaluation(questions_path=self.fixture_questions, output_path=self.output_json,
+                       with_answers=True, bm25_index=self.bm25_index)
+        mock_unload.assert_not_called()
+        run_evaluation(questions_path=self.fixture_questions, output_path=self.output_json,
+                       with_answers=True, bm25_index=self.bm25_index, cold_start=True)
+        mock_unload.assert_called_once()
+
     def test_assign_stable_chunk_ids_is_repeatable_and_unique(self):
         from scripts.eval import assign_stable_chunk_ids
         import copy

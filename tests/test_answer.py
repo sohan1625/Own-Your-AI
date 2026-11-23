@@ -374,3 +374,26 @@ class TestNormalizeAnswer(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestUnloadModel(unittest.TestCase):
+    @patch('urllib.request.urlopen')
+    def test_unload_sends_keep_alive_zero_to_local_host(self, mock_urlopen):
+        from src.answer import unload_model
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text('[ollama]\nhost = "http://127.0.0.1:11434"\nmodel = "mistral"\n', encoding="utf-8")
+            unload_model(config_path)
+        request = mock_urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/generate")
+        self.assertEqual(json.loads(request.data.decode("utf-8")), {"model": "mistral", "keep_alive": 0})
+
+    @patch('urllib.request.urlopen')
+    def test_unload_refuses_non_local_host(self, mock_urlopen):
+        from src.answer import unload_model
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text('[ollama]\nhost = "http://example.com:11434"\nmodel = "mistral"\n', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                unload_model(config_path)
+        mock_urlopen.assert_not_called()

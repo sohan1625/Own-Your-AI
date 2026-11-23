@@ -32,7 +32,7 @@ from src.retrieve import (
     get_retrieval_params,
     load_config,
 )
-from src.answer import generate_answer, get_generation_top_k
+from src.answer import generate_answer, get_generation_top_k, unload_model
 import src.answer as answer_module
 from src.cite import resolve_citations
 from scripts.demo import evaluate_citations_and_answer
@@ -143,8 +143,14 @@ def run_evaluation(
     retriever: str = "keyword",
     chunks: Optional[List[Dict[str, Any]]] = None,
     vectors: Optional[List[List[float]]] = None,
+    cold_start: bool = False,
 ) -> Dict[str, Any]:
-    """Run the evaluation harness over questions and return the results dictionary."""
+    """Run the evaluation harness over questions and return the results dictionary.
+
+    ``cold_start`` unloads the answer model before the first question, so every run
+    starts with an empty Ollama prompt cache (see ``src.answer.unload_model``). The
+    command line turns it on by default.
+    """
     if retriever not in ("keyword", "vector", "hybrid"):
         raise ValueError(f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', or 'hybrid'.")
 
@@ -175,6 +181,9 @@ def run_evaluation(
     rrf_k = get_rrf_k(config_path)
     retrieval_params = get_retrieval_params(config_path)
     top_n = retrieval_params["top_n"]
+
+    if with_answers and cold_start:
+        unload_model(config_path)
 
     eval_results: List[Dict[str, Any]] = []
     answerable_count = 0
@@ -389,6 +398,12 @@ def main() -> None:
         help="Path to output results JSON file (default: eval/results_<retriever>.json).",
     )
     parser.add_argument(
+        "--warm-model",
+        action="store_true",
+        help="Do not unload the answer model first (faster, but answers can depend on "
+        "Ollama's prompt cache from earlier requests, so runs may not repeat).",
+    )
+    parser.add_argument(
         "--config",
         default="config.toml",
         help="Path to configuration TOML file.",
@@ -401,6 +416,7 @@ def main() -> None:
         with_answers=args.with_answers,
         config_path=args.config,
         retriever=args.retriever,
+        cold_start=not args.warm_model,
     )
     print_results_table(results)
 

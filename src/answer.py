@@ -183,6 +183,25 @@ def normalize_answer(raw_text: str, chunk_ids: List[str]) -> str:
     return text.strip()
 
 
+def unload_model(config_path: str | Path = "config.toml") -> None:
+    """Ask the local Ollama server to unload the answer model now (``keep_alive: 0``).
+
+    Ollama's runner keeps a prompt cache (KV reuse) that outlives a request. How much of
+    a prompt is reused changes the batch boundaries used to compute the rest, which
+    changes the floating-point result enough to flip greedy (temperature 0) outputs.
+    Unloading clears that cache, so the next requests start from the same state.
+    """
+    cfg = _load_config(config_path)
+    ollama_cfg = cfg.get("ollama", {})
+    model = ollama_cfg.get("model") or os.getenv("OLLAMA_MODEL")
+    host = _validate_host(ollama_cfg.get("host") or os.getenv("OLLAMA_HOST") or "")
+    payload = json.dumps({"model": model, "keep_alive": 0}).encode("utf-8")
+    request = urllib.request.Request(f"{host}/api/generate", data=payload, method="POST")
+    request.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(request) as resp:
+        resp.read()
+
+
 def generate_answer(
     question: str,
     chunks: List[Dict[str, Any]],
