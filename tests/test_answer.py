@@ -243,6 +243,21 @@ class TestAnswerGeneration(unittest.TestCase):
         payload = json.loads(mock_urlopen.call_args[0][0].data.decode('utf-8'))
         self.assertNotIn("options", payload)
 
+    @patch('urllib.request.urlopen')
+    def test_max_tokens_from_config_is_sent_as_num_predict(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"response": "Answer [c1]"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(temp_dir, 'temperature = 0\nmax_tokens = 256\n')
+            generate_answer(self.question, self.sample_chunks, config_path=config_path)
+        payload = json.loads(mock_urlopen.call_args[0][0].data.decode('utf-8'))
+        self.assertEqual(payload["options"], {"temperature": 0, "num_predict": 256})
+
+    def test_project_config_caps_answer_length(self):
+        from src.answer import get_generation_max_tokens
+        self.assertEqual(get_generation_max_tokens("config.toml"), 256)
+
     def test_project_config_sets_temperature_zero(self):
         from src.answer import get_generation_temperature
         self.assertEqual(get_generation_temperature("config.toml"), 0.0)

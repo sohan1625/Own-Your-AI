@@ -34,6 +34,7 @@ search_document_prefix = "search_document: "
 [generation]
 top_k = 4
 temperature = 0           # greedy decoding, so repeated eval runs give the same answers
+max_tokens = 256          # answer length cap (Ollama num_predict); longest normal eval answer is 112 tokens, and greedy decoding looped past 10,000 tokens on q37 without it
 
 
 [ollama]
