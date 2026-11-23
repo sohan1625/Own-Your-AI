@@ -1,18 +1,31 @@
 import pathlib
+import tempfile
 import unittest
 from src.chunk import chunk_page_records
 
 class TestChunking(unittest.TestCase):
+    """Fixed-window chunking. Uses its own config, since config.toml may select "semantic"."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.fixed_config = pathlib.Path(self._tmp.name) / "config.toml"
+        self.fixed_config.write_text(
+            '[chunking]\nchunk_size = 400\noverlap = 50\nstrategy = "fixed"\n', encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def test_empty_page(self):
         records = [{"file": "doc.pdf", "page": 1, "text": "", "file_hash": "h"}]
-        chunks = chunk_page_records(records)
+        chunks = chunk_page_records(records, config_path=self.fixed_config)
         self.assertEqual(chunks, [], "Empty page should produce no chunks")
 
     def test_short_page_default_config(self):
         # Default config (400 tokens ≈ 533 words) -> any short text yields a single chunk
         text = "short page text"
         records = [{"file": "doc.pdf", "page": 1, "text": text, "file_hash": "h"}]
-        chunks = chunk_page_records(records)
+        chunks = chunk_page_records(records, config_path=self.fixed_config)
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0]["text"], text)
         self.assertEqual(chunks[0]["parent_id"], "doc.pdf#page1")
@@ -46,7 +59,7 @@ class TestChunking(unittest.TestCase):
             {"file": "doc.pdf", "page": 1, "text": text1, "file_hash": "h"},
             {"file": "doc.pdf", "page": 2, "text": text2, "file_hash": "h"},
         ]
-        chunks = chunk_page_records(records)
+        chunks = chunk_page_records(records, config_path=self.fixed_config)
         # All chunks from page 1 should have parent_id ending with #page1, similarly for page2
         page1_chunks = [c for c in chunks if c["page"] == 1]
         page2_chunks = [c for c in chunks if c["page"] == 2]

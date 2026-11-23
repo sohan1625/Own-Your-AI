@@ -155,6 +155,47 @@ def insert_document(
         )
 
 
+def replace_chunks(
+    document_id: str,
+    chunks: list[dict[str, Any]],
+    embeddings: list[list[float]] | None = None,
+) -> int:
+    """Replace a document's chunks (and embeddings) in one transaction.
+
+    Also deletes cached answers that used the document, since they were produced
+    from the old chunks. Returns the number of old chunks removed.
+    """
+    if embeddings is not None and len(embeddings) != len(chunks):
+        raise ValueError("embeddings must align with chunks")
+    vectors = embeddings if embeddings is not None else [None] * len(chunks)
+    with connect() as connection:
+        removed = connection.execute("DELETE FROM chunks WHERE doc_id = %s", (document_id,)).rowcount
+        connection.cursor().executemany(
+            """
+            INSERT INTO chunks (id, doc_id, page, start_char, end_char, text, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::public.vector)
+            """,
+            [
+                (
+                    chunk["chunk_id"],
+                    document_id,
+                    chunk["page"],
+                    chunk["start_char"],
+                    chunk["end_char"],
+                    chunk["text"],
+                    _vector_literal(vector),
+                )
+                for chunk, vector in zip(chunks, vectors)
+            ],
+        )
+        connection.execute(
+            "UPDATE documents SET chunk_count = %s WHERE id = %s", (len(chunks), document_id)
+        )
+        if connection.execute("SELECT to_regclass('answer_cache') AS t").fetchone()["t"]:
+            connection.execute("DELETE FROM answer_cache WHERE doc_ids::jsonb ? %s", (document_id,))
+    return removed
+
+
 def get_chunks_without_embeddings() -> list[dict[str, Any]]:
     with connect() as connection:
         return connection.execute(

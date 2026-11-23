@@ -22,7 +22,7 @@ is used.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
@@ -49,13 +49,18 @@ class PgVectorRetriever(BaseRetriever):
     doc_ids: List[str]
     k: int = 20
     config_path: str = "config.toml"
+    # Embeds the query; defaults to the local model with the search_query prefix.
+    embed_query: Callable[[str], List[float]] | None = None
     _last_top_score: float | None = PrivateAttr(default=None)
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> List[Document]:
-        prefix = get_embedding_prefix("query", config_path=self.config_path)
-        vector = embed_text(query, prefix=prefix, config_path=self.config_path)
+        if self.embed_query is not None:
+            vector = self.embed_query(query)
+        else:
+            prefix = get_embedding_prefix("query", config_path=self.config_path)
+            vector = embed_text(query, prefix=prefix, config_path=self.config_path)
         if not vector:
             self._last_top_score = None
             return []
@@ -79,6 +84,7 @@ class LangChainHybrid:
         top_n: int = 20,
         rrf_k: int = 60,
         config_path: str | Path = "config.toml",
+        embed_query: Callable[[str], List[float]] | None = None,
     ) -> None:
         self.chunks_by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
         self.top_n = top_n
@@ -92,6 +98,7 @@ class LangChainHybrid:
             doc_ids=list(doc_ids),
             k=top_n,
             config_path=str(config_path),
+            embed_query=embed_query,
         )
         self.ensemble = EnsembleRetriever(
             retrievers=[self.bm25, self.vector],

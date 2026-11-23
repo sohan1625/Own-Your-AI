@@ -7,12 +7,12 @@ data_dir = "data"           # directory for document ingestion (watched folder)
 [chunking]
 chunk_size = 400      # tokens (default: 400, tuned on EVAL.md)
 overlap = 50           # tokens (default: 50, tuned on EVAL.md)
-strategy = "fixed"     # "fixed" (word windows above) or "semantic" (split at topic shifts between sentences)
+strategy = "semantic"  # "fixed" (word windows above) or "semantic" (split at topic shifts between sentences)
 semantic_percentile = 10  # semantic only: new chunk where consecutive-sentence similarity < this percentile (chosen on eval/calibration.jsonl, scripts/calibrate_chunking.py)
 
 [retrieval]
 method = "hybrid"           # "hybrid" (BM25 + vector, fused with RRF) or "keyword" (BM25 only)
-engine = "custom"           # hybrid only: "custom" (src.index + src.fuse) or "langchain" (src/lc_retrieve.py: BM25Retriever + pgvector, EnsembleRetriever)
+engine = "langchain"        # hybrid only: "custom" (src.index + src.fuse) or "langchain" (src/lc_retrieve.py: BM25Retriever + pgvector, EnsembleRetriever)
 top_n_per_retriever = 20    # default: 20 (candidates each for BM25 and vector search)
 
 [fusion]

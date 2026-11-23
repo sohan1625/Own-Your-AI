@@ -97,7 +97,18 @@ def test_ask_uses_langchain_engine_when_configured(monkeypatch, tmp_path, isolat
     assert response.json()["citations"][0]["file"] == "a.pdf"
 
 
-def test_default_engine_is_custom():
+def test_project_config_uses_langchain_engine():
     from src import api
 
-    assert api._retrieval_engine() == "custom"
+    assert api._retrieval_engine() == "langchain"
+
+
+def test_query_embedder_is_used_when_given(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lc_retrieve.db, "vector_search", lambda v, d, n: [("a", 0.7)])
+    monkeypatch.setattr(lc_retrieve, "embed_text", lambda *a, **k: pytest.fail("default embedder used"))
+    engine = lc_retrieve.LangChainHybrid(
+        CHUNKS, ["d1"], top_n=3, embed_query=lambda q: seen.append(q) or fake_embedding(q)
+    )
+    _, top = engine.retrieve("Oak")
+    assert seen == ["Oak"] and top == 0.7
