@@ -35,6 +35,7 @@ from src.retrieve import (
 from src.answer import generate_answer, get_generation_top_k
 import src.answer as answer_module
 from src.cite import resolve_citations
+from src.faithfulness import check_answer
 from scripts.demo import evaluate_citations_and_answer
 
 
@@ -185,6 +186,11 @@ def run_evaluation(
     sum_reciprocal_rank = 0.0
     hallucination_count = 0
     wrongly_refused_count = 0
+    faith_scored = 0
+    faith_supported = 0
+    faith_uncited = 0
+    faith_answers = 0
+    faith_answers_full = 0
 
     for q in questions:
         qid = q.get("id", "unknown")
@@ -218,6 +224,7 @@ def run_evaluation(
         generated_answer: Optional[str] = None
         hallucinated: Optional[bool] = None
         wrongly_refused: Optional[bool] = False if (with_answers and answerable) else None
+        faithfulness: Optional[Dict[str, Any]] = None
 
         if with_answers:
             top_k = get_generation_top_k(config_path=config_path)
@@ -255,6 +262,16 @@ def run_evaluation(
             cit_res = resolve_citations(raw_ans, gen_chunks)
             ans_text, _failed = evaluate_citations_and_answer(cit_res)
             generated_answer = ans_text
+
+            # Faithfulness is a separate metric; it never changes the answer.
+            if ans_text.strip().rstrip(".").strip().lower() != "not found in your documents":
+                faithfulness = check_answer(ans_text, gen_chunks)
+                faith_answers += 1
+                faith_scored += faithfulness["scored"]
+                faith_supported += faithfulness["supported"]
+                faith_uncited += faithfulness["uncited"]
+                if faithfulness["sentences"] and faithfulness["supported"] == len(faithfulness["sentences"]):
+                    faith_answers_full += 1
 
             if not answerable:
                 hallucinated = bool("not found in your documents" not in ans_text.lower())
@@ -294,6 +311,7 @@ def run_evaluation(
             "generated_answer": generated_answer,
             "hallucinated": hallucinated,
             "wrongly_refused": wrongly_refused,
+            "faithfulness": faithfulness,
         })
 
     recall_1 = (hits_at_1 / answerable_count) if answerable_count else 0.0
@@ -316,6 +334,13 @@ def run_evaluation(
         "hallucination_rate": round(hallucination_rate, 4) if hallucination_rate is not None else None,
         # Answerable questions answered with the refusal (threshold or model).
         "answerable_wrongly_refused": wrongly_refused_count if with_answers else None,
+        # Token-overlap faithfulness over non-refusal answers (src/faithfulness.py).
+        "faithfulness_answers_checked": faith_answers if with_answers else None,
+        "faithfulness_answers_fully_supported": faith_answers_full if with_answers else None,
+        "faithfulness_sentences_scored": faith_scored if with_answers else None,
+        "faithfulness_sentences_supported": faith_supported if with_answers else None,
+        "faithfulness_sentences_uncited": faith_uncited if with_answers else None,
+        "faithfulness_sentence_rate": round(faith_supported / faith_scored, 4) if (with_answers and faith_scored) else None,
     }
 
     full_output = {
@@ -362,6 +387,12 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
         print("  Hallucination Rate:     N/A (retrieval-only mode; use --with-answers to evaluate)")
     if summary.get('answerable_wrongly_refused') is not None:
         print(f"  Answerable refused:     {summary['answerable_wrongly_refused']}")
+    if summary.get('faithfulness_sentence_rate') is not None:
+        print(
+            f"  Faithfulness (overlap): {summary['faithfulness_sentence_rate']:.4f} of sentences "
+            f"({summary['faithfulness_sentences_supported']}/{summary['faithfulness_sentences_scored']}); "
+            f"{summary['faithfulness_answers_fully_supported']}/{summary['faithfulness_answers_checked']} answers fully supported"
+        )
     print()
 
 
