@@ -80,6 +80,20 @@ Keep rule, fixed before any results were seen: a change is kept only if, against
 
 Checks after each experiment: `pytest -q --basetemp=.pytest_tmp`, `python -m scripts.offline_check --with-network` (the strict offline mode refuses to run while the internet is reachable, and the network was left on), and `python -m scripts.deletion_check`.
 
+### Summary
+
+All five features are combined on `exp/combined`, each behind a config switch. Decisions follow the keep rule in each section.
+
+| Exp | Feature | Switch (value on `exp/combined`) | Decision | Branch |
+|---|---|---|---|---|
+| 0 | Temperature 0 + repeatable eval (model unloaded before each run) | `[generation] temperature = 0`; eval `--warm-model` to skip the unload | kept | `exp/temperature-zero` |
+| 1 | Semantic chunking | `[chunking] strategy = "fixed"` (set `"semantic"` to use) | discarded* | `exp/semantic-chunking` |
+| 2 | LangChain retrieval (BM25Retriever + pgvector, EnsembleRetriever) | `[retrieval] engine = "custom"` (set `"langchain"` to use) | discarded* | `exp/langchain-retrieval` |
+| 3 | Faithfulness metric (token overlap per sentence) | always reported by `scripts/eval.py --with-answers` | discarded* (measurement only) | `exp/faithfulness` |
+| 4 | Semantic answer cache | `[cache] semantic = true`, `semantic_threshold = 0.972` | kept | `exp/semantic-cache` |
+
+\* Exp 1–3 were discarded only because hallucination rose from 1 to 2 of 10, in each case through q37. The Exp 0 follow-up shows q37 flips between runs on unchanged code because of Ollama's prompt cache, so these decisions rest on noise and have not been re-checked with the eval fix.
+
 ### Exp 0: temperature 0 (kept; new baseline)
 
 - Branch: `exp/temperature-zero` (from `main`)
@@ -123,93 +137,6 @@ Cause: **Ollama's prompt cache**, not sampling, retrieval or the threshold.
 
 Fix (eval only, on `exp/temperature-zero`): `scripts/eval.py` unloads the answer model before the first question (`src.answer.unload_model`, a `keep_alive: 0` request to the local Ollama), so each run starts from an empty prompt cache and sends the same sequence of requests. `--warm-model` skips it. The app is unchanged. A five-run confirmation of the fixed eval was started and stopped before any run finished, so reproducibility of full runs with the fix is not yet measured. Exp 1–3 decisions were not re-checked.
 
-### Exp 4: semantic cache (kept)
-
-- Branch: `exp/semantic-cache` (from `exp/temperature-zero` before the follow-up eval fix)
-- Settings: `[cache] semantic = true`, `semantic_threshold = 0.972`. Exact match stays the first check. Only on an exact miss, the question is embedded (nomic-embed-text, `search_query:` prefix) and compared by cosine with cached question embeddings for the **same document set** (new `doc_set_key` column: hash of the sorted document IDs and their sha256 hashes). The closest entry is served only if its similarity is ≥ 0.972. Unchanged rules: refusals are never stored, follow-ups with conversation history never use the cache, and deleting a document deletes every entry that used it (semantic entries included; unit-tested). `/ask` now also returns `cache_match` (`"exact"`, `"semantic"` or null).
-- Test pairs: `eval/cache_pairs.jsonl`, 20 paraphrase pairs and 20 near-miss pairs written from the eval PDF.
-- Threshold chosen on those pairs only (`python -m scripts.calibrate_cache`), with a rule fixed in advance: simulate a cache holding every `question_a`; for each `question_b` take the closest cached question; the threshold is the lowest value with zero near-miss false hits (a near-miss counts as a false hit if it matches *any* cached question) plus a 0.005 margin, rounded up. Closest near-miss similarity 0.9661 (n08: "throw" vs "throws") → threshold 0.972. Three near-misses were closest to a *different* pair's question (n11 → p05 at 0.9055, n07 → p07, n14 → p04).
-
-The two groups overlap: paraphrase similarities range 0.7895–0.9855 and near-miss similarities 0.7346–0.9661. 15 of 20 paraphrases score below the most similar near-miss, so a threshold with zero near-miss false hits can only catch the closest paraphrases.
-
-| Measurement | Result |
-|---|---|
-| Calibration (similarities only): paraphrase hits at 0.972 | 4 / 20 (p20, p09, p03, p12) |
-| Calibration: near-miss false hits at 0.972 | 0 / 20 |
-| End to end via `POST /ask` (`python -m scripts.measure_cache`): paraphrase hit rate | **3 / 20** (p09, p12, p20); 3 / 17 counting only pairs whose `question_a` was answered (p03, p06, p08 were refused, so not cached) |
-| End to end: near-miss false-hit rate | **0 / 20** (18 of the 20 `question_a` were cached; n10, n13 refused) |
-| Semantic-hit latency (3 questions × 5 asks) | p50 0.246 s, p95 0.27 s |
-| Exact-hit latency (35 asks) | p50 0.111 s, p95 0.15 s |
-| Cache miss, answer generated (37 asks) | p50 5.3 s |
-
-Caveats: the threshold was chosen on the same 40 pairs it is reported on, so zero false hits on new near-misses is not guaranteed, and the margin above the closest near-miss is only 0.006. The semantic hit p95 comes from 15 samples on 3 questions.
-
-Keep rule: the eval (`scripts/eval.py`) does not use the answer cache, so Recall@3, MRR, hallucination and wrongly refused are unchanged by construction (the eval was not re-run). Near-miss false-hit rate is 0 / 20 and the paraphrase hit rate is reported. Decision: **kept**.
-
-Checks: pytest 89 passed; offline check (online audit) 8 passed, 0 failed (exact repeat still served from cache, 0.14 s); deletion check 15 passed, 0 failed.
-
-### Exp 3: faithfulness check (discarded by the keep rule; see note)
-
-- Branch: `exp/faithfulness` (from `exp/temperature-zero`)
-- Settings: Exp 0 baseline unchanged. New `src/faithfulness.py`, called from `scripts/eval.py` on every non-refusal answer; it never changes the answer text. Each answer sentence is scored against the chunk it cites (its own `[id]`; if it has none, the next citation in the answer, else the previous one). Score = share of the sentence's content words (lower-cased, stopwords removed, trailing plural "s" stripped) found in the cited chunk text. Supported when score ≥ 0.5, a threshold fixed before the run and not tuned.
-
-| Metric | Baseline (Exp 0) | Exp 3 |
-|--------|------|------|
-| Recall@1 | 0.6333 | 0.6333 |
-| Recall@3 | 0.9667 | 0.9667 |
-| Recall@5 | 1.0000 | 1.0000 |
-| MRR | 0.8028 | 0.8028 |
-| Hallucination (of 10) | 0.10 (q32) | **0.20 (q32, q37)** |
-| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) |
-| Faithfulness, all non-refusal answers | not measured | 62 / 95 sentences supported (0.6526); 21 of 28 answers fully supported |
-| Faithfulness, answerable questions only | not measured | 47 / 56 sentences (0.8393); 21 of 26 answers fully supported |
-| Faithfulness, the 2 hallucinated answers | not measured | 15 / 39 sentences (0.3846); 0 of 2 fully supported |
-
-Unsupported answerable sentences: q12, q16, q25 (2), q27, q29 (4). q25 shows the check's main use: the text matches the PDF, but the citation points at the page-41 chunk (daemon code example) while the definition is in another chunk, so the citation is wrong even though the answer is right. q29 shows a false negative: a correct paraphrase of the Statement vs PreparedStatement table scores 0.29–0.43.
-
-Limits of the check (lexical overlap, not entailment): paraphrases score low (false "unsupported"); a flipped negation, swapped number, or wrong relation between copied words still scores high (false "supported"; unit-tested as a known limit); when mistral writes no citation the app attaches the top chunk's ID, so the check scores against that fallback chunk; very short sentences swing between 0 and 1; markdown/code lines in long answers (q37) are each counted as sentences.
-
-Decision: **discarded by the keep rule** because hallucination rose 0.10 → 0.20. **Note:** this experiment does not touch retrieval, the prompt, or generation; the answer path is identical to the baseline. q37 changed from a refusal to a hallucination on identical code and settings, so the rise is run-to-run generation noise, not an effect of this change. Across the runs of the baseline configuration in this session (temperature 0), q37 hallucinated in 2 of 5 (once in the random-ID pair, and here), and q37 is also the only question that moved hallucination in Exp 1 and Exp 2. The faithfulness metric itself is measurement-only and could be adopted separately.
-
-```
-{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
- "recall_at_1": 0.6333, "recall_at_3": 0.9667, "recall_at_5": 1.0, "mrr": 0.8028,
- "hallucination_rate": 0.2, "answerable_wrongly_refused": 4,
- "faithfulness_answers_checked": 28, "faithfulness_answers_fully_supported": 21,
- "faithfulness_sentences_scored": 95, "faithfulness_sentences_supported": 62,
- "faithfulness_sentences_uncited": 0, "faithfulness_sentence_rate": 0.6526}
-```
-
-Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
-
-### Exp 2: LangChain retrieval (discarded)
-
-- Branch: `exp/langchain-retrieval` (from `exp/temperature-zero`)
-- Settings: `[retrieval] engine = "langchain"` for the run (committed default `"custom"`). `src/lc_retrieve.py`: `BM25Retriever` (langchain-community 0.4.2, rank-bm25 0.2.2) with the project tokenizer (`src.index._tokenize`), k = 20; `PgVectorRetriever`, a `BaseRetriever` that embeds the query with nomic-embed-text and calls `db.vector_search`, k = 20; fused by `EnsembleRetriever` (langchain-classic 1.1.0, langchain-core 1.8.4) with weights [0.5, 0.5], c = 60, `id_key = "chunk_id"`. `/ask` uses the same switch.
-- Eval: `python scripts/eval.py --retriever langchain --with-answers` loads the eval chunks and their embeddings into a throwaway PostgreSQL schema (dropped afterwards; verified no `eval_*` schema was left), so `db.vector_search` serves the vectors. Both engines ran on the same chunks (fixed chunking with stable IDs, 44 chunks) in this branch.
-- Fusion difference: `EnsembleRetriever` uses **weighted** RRF, score(d) = Σ wᵢ / (c + rankᵢ(d)). With equal weights and c = 60 that is half our RRF (k = 60) and gives the same order for the same input lists (unit-tested). The lists themselves differ: `rank_bm25.BM25Okapi` uses a different IDF (epsilon floor) and returns the top k even at score 0, while our BM25 drops zero-score chunks.
-
-| Metric | Baseline (Exp 0) | Custom engine (rerun here) | LangChain engine |
-|--------|------|------|------|
-| Recall@1 | 0.6333 | 0.6333 | 0.6333 |
-| Recall@3 | 0.9667 | 0.9667 | 1.0000 |
-| Recall@5 | 1.0000 | 1.0000 | 1.0000 |
-| MRR | 0.8028 | 0.8028 | 0.8056 |
-| Hallucination (of 10) | 0.10 (q32) | 0.10 (q32) | **0.20 (q32, q37)** |
-| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) | 4 (same) |
-
-The only retrieval difference is q14 (gold rank 4 → 3). q37 (PostgreSQL replication) has the same top vector score in both engines and passes the 0.605 threshold either way; with the LangChain ordering of the top 4 chunks mistral answered from general knowledge instead of refusing.
-
-Decision: **discarded**: hallucination rose (0.10 → 0.20). Retrieval gained slightly (Recall@3 +0.033, MRR +0.003), on one question.
-
-```
-{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
- "recall_at_1": 0.6333, "recall_at_3": 1.0, "recall_at_5": 1.0, "mrr": 0.8056,
- "hallucination_rate": 0.2, "answerable_wrongly_refused": 4}
-```
-
-Checks: pytest 86 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
-
 ### Exp 1: semantic chunking (discarded)
 
 - Branch: `exp/semantic-chunking` (from `exp/temperature-zero`)
@@ -248,3 +175,90 @@ Decision: **discarded**: hallucination rose (q37, PostgreSQL replication, answer
 ```
 
 Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 2: LangChain retrieval (discarded)
+
+- Branch: `exp/langchain-retrieval` (from `exp/temperature-zero`)
+- Settings: `[retrieval] engine = "langchain"` for the run (committed default `"custom"`). `src/lc_retrieve.py`: `BM25Retriever` (langchain-community 0.4.2, rank-bm25 0.2.2) with the project tokenizer (`src.index._tokenize`), k = 20; `PgVectorRetriever`, a `BaseRetriever` that embeds the query with nomic-embed-text and calls `db.vector_search`, k = 20; fused by `EnsembleRetriever` (langchain-classic 1.1.0, langchain-core 1.8.4) with weights [0.5, 0.5], c = 60, `id_key = "chunk_id"`. `/ask` uses the same switch.
+- Eval: `python scripts/eval.py --retriever langchain --with-answers` loads the eval chunks and their embeddings into a throwaway PostgreSQL schema (dropped afterwards; verified no `eval_*` schema was left), so `db.vector_search` serves the vectors. Both engines ran on the same chunks (fixed chunking with stable IDs, 44 chunks) in this branch.
+- Fusion difference: `EnsembleRetriever` uses **weighted** RRF, score(d) = Σ wᵢ / (c + rankᵢ(d)). With equal weights and c = 60 that is half our RRF (k = 60) and gives the same order for the same input lists (unit-tested). The lists themselves differ: `rank_bm25.BM25Okapi` uses a different IDF (epsilon floor) and returns the top k even at score 0, while our BM25 drops zero-score chunks.
+
+| Metric | Baseline (Exp 0) | Custom engine (rerun here) | LangChain engine |
+|--------|------|------|------|
+| Recall@1 | 0.6333 | 0.6333 | 0.6333 |
+| Recall@3 | 0.9667 | 0.9667 | 1.0000 |
+| Recall@5 | 1.0000 | 1.0000 | 1.0000 |
+| MRR | 0.8028 | 0.8028 | 0.8056 |
+| Hallucination (of 10) | 0.10 (q32) | 0.10 (q32) | **0.20 (q32, q37)** |
+| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) | 4 (same) |
+
+The only retrieval difference is q14 (gold rank 4 → 3). q37 (PostgreSQL replication) has the same top vector score in both engines and passes the 0.605 threshold either way; with the LangChain ordering of the top 4 chunks mistral answered from general knowledge instead of refusing.
+
+Decision: **discarded**: hallucination rose (0.10 → 0.20). Retrieval gained slightly (Recall@3 +0.033, MRR +0.003), on one question.
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.6333, "recall_at_3": 1.0, "recall_at_5": 1.0, "mrr": 0.8056,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 4}
+```
+
+Checks: pytest 86 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 3: faithfulness check (discarded by the keep rule; see note)
+
+- Branch: `exp/faithfulness` (from `exp/temperature-zero`)
+- Settings: Exp 0 baseline unchanged. New `src/faithfulness.py`, called from `scripts/eval.py` on every non-refusal answer; it never changes the answer text. Each answer sentence is scored against the chunk it cites (its own `[id]`; if it has none, the next citation in the answer, else the previous one). Score = share of the sentence's content words (lower-cased, stopwords removed, trailing plural "s" stripped) found in the cited chunk text. Supported when score ≥ 0.5, a threshold fixed before the run and not tuned.
+
+| Metric | Baseline (Exp 0) | Exp 3 |
+|--------|------|------|
+| Recall@1 | 0.6333 | 0.6333 |
+| Recall@3 | 0.9667 | 0.9667 |
+| Recall@5 | 1.0000 | 1.0000 |
+| MRR | 0.8028 | 0.8028 |
+| Hallucination (of 10) | 0.10 (q32) | **0.20 (q32, q37)** |
+| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) |
+| Faithfulness, all non-refusal answers | not measured | 62 / 95 sentences supported (0.6526); 21 of 28 answers fully supported |
+| Faithfulness, answerable questions only | not measured | 47 / 56 sentences (0.8393); 21 of 26 answers fully supported |
+| Faithfulness, the 2 hallucinated answers | not measured | 15 / 39 sentences (0.3846); 0 of 2 fully supported |
+
+Unsupported answerable sentences: q12, q16, q25 (2), q27, q29 (4). q25 shows the check's main use: the text matches the PDF, but the citation points at the page-41 chunk (daemon code example) while the definition is in another chunk, so the citation is wrong even though the answer is right. q29 shows a false negative: a correct paraphrase of the Statement vs PreparedStatement table scores 0.29–0.43.
+
+Limits of the check (lexical overlap, not entailment): paraphrases score low (false "unsupported"); a flipped negation, swapped number, or wrong relation between copied words still scores high (false "supported"; unit-tested as a known limit); when mistral writes no citation the app attaches the top chunk's ID, so the check scores against that fallback chunk; very short sentences swing between 0 and 1; markdown/code lines in long answers (q37) are each counted as sentences.
+
+Decision: **discarded by the keep rule** because hallucination rose 0.10 → 0.20. **Note:** this experiment does not touch retrieval, the prompt, or generation; the answer path is identical to the baseline. q37 changed from a refusal to a hallucination on identical code and settings, so the rise is run-to-run generation noise, not an effect of this change. Across the runs of the baseline configuration in this session (temperature 0), q37 hallucinated in 2 of 5 (once in the random-ID pair, and here), and q37 is also the only question that moved hallucination in Exp 1 and Exp 2. The faithfulness metric itself is measurement-only and could be adopted separately.
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.6333, "recall_at_3": 0.9667, "recall_at_5": 1.0, "mrr": 0.8028,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 4,
+ "faithfulness_answers_checked": 28, "faithfulness_answers_fully_supported": 21,
+ "faithfulness_sentences_scored": 95, "faithfulness_sentences_supported": 62,
+ "faithfulness_sentences_uncited": 0, "faithfulness_sentence_rate": 0.6526}
+```
+
+Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 4: semantic cache (kept)
+
+- Branch: `exp/semantic-cache` (from `exp/temperature-zero` before the follow-up eval fix)
+- Settings: `[cache] semantic = true`, `semantic_threshold = 0.972`. Exact match stays the first check. Only on an exact miss, the question is embedded (nomic-embed-text, `search_query:` prefix) and compared by cosine with cached question embeddings for the **same document set** (new `doc_set_key` column: hash of the sorted document IDs and their sha256 hashes). The closest entry is served only if its similarity is ≥ 0.972. Unchanged rules: refusals are never stored, follow-ups with conversation history never use the cache, and deleting a document deletes every entry that used it (semantic entries included; unit-tested). `/ask` now also returns `cache_match` (`"exact"`, `"semantic"` or null).
+- Test pairs: `eval/cache_pairs.jsonl`, 20 paraphrase pairs and 20 near-miss pairs written from the eval PDF.
+- Threshold chosen on those pairs only (`python -m scripts.calibrate_cache`), with a rule fixed in advance: simulate a cache holding every `question_a`; for each `question_b` take the closest cached question; the threshold is the lowest value with zero near-miss false hits (a near-miss counts as a false hit if it matches *any* cached question) plus a 0.005 margin, rounded up. Closest near-miss similarity 0.9661 (n08: "throw" vs "throws") → threshold 0.972. Three near-misses were closest to a *different* pair's question (n11 → p05 at 0.9055, n07 → p07, n14 → p04).
+
+The two groups overlap: paraphrase similarities range 0.7895–0.9855 and near-miss similarities 0.7346–0.9661. 15 of 20 paraphrases score below the most similar near-miss, so a threshold with zero near-miss false hits can only catch the closest paraphrases.
+
+| Measurement | Result |
+|---|---|
+| Calibration (similarities only): paraphrase hits at 0.972 | 4 / 20 (p20, p09, p03, p12) |
+| Calibration: near-miss false hits at 0.972 | 0 / 20 |
+| End to end via `POST /ask` (`python -m scripts.measure_cache`): paraphrase hit rate | **3 / 20** (p09, p12, p20); 3 / 17 counting only pairs whose `question_a` was answered (p03, p06, p08 were refused, so not cached) |
+| End to end: near-miss false-hit rate | **0 / 20** (18 of the 20 `question_a` were cached; n10, n13 refused) |
+| Semantic-hit latency (3 questions × 5 asks) | p50 0.246 s, p95 0.27 s |
+| Exact-hit latency (35 asks) | p50 0.111 s, p95 0.15 s |
+| Cache miss, answer generated (37 asks) | p50 5.3 s |
+
+Caveats: the threshold was chosen on the same 40 pairs it is reported on, so zero false hits on new near-misses is not guaranteed, and the margin above the closest near-miss is only 0.006. The semantic hit p95 comes from 15 samples on 3 questions.
+
+Keep rule: the eval (`scripts/eval.py`) does not use the answer cache, so Recall@3, MRR, hallucination and wrongly refused are unchanged by construction (the eval was not re-run). Near-miss false-hit rate is 0 / 20 and the paraphrase hit rate is reported. Decision: **kept**.
+
+Checks: pytest 89 passed; offline check (online audit) 8 passed, 0 failed (exact repeat still served from cache, 0.14 s); deletion check 15 passed, 0 failed.
