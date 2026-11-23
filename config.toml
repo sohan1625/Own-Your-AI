@@ -7,6 +7,8 @@ data_dir = "data"           # directory for document ingestion (watched folder)
 [chunking]
 chunk_size = 400      # tokens (default: 400, tuned on EVAL.md)
 overlap = 50           # tokens (default: 50, tuned on EVAL.md)
+strategy = "fixed"     # "fixed" (word windows above) or "semantic" (split at topic shifts between sentences)
+semantic_percentile = 10  # semantic only: new chunk where consecutive-sentence similarity < this percentile (chosen on eval/calibration.jsonl, scripts/calibrate_chunking.py)
 
 [retrieval]
 method = "hybrid"           # "hybrid" (BM25 + vector, fused with RRF) or "keyword" (BM25 only)

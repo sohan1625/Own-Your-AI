@@ -209,3 +209,42 @@ Decision: **discarded**: hallucination rose (0.10 → 0.20). Retrieval gained sl
 ```
 
 Checks: pytest 86 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 1: semantic chunking (discarded)
+
+- Branch: `exp/semantic-chunking` (from `exp/temperature-zero`)
+- Settings: `[chunking] strategy = "semantic"` for the run (the committed default stays `"fixed"`), `semantic_percentile = 10`. Pages are split into sentences (`.`/`!`/`?` + whitespace, or a blank line); each sentence is embedded with nomic-embed-text (`search_document:` prefix); a new chunk starts where the cosine similarity of two consecutive sentences is below the 10th percentile of all consecutive-sentence similarities in the corpus. Chunks never cross pages and are capped at `chunk_size` (533 words). `start_char`/`end_char` are exact offsets into the page text. 520 sentences → 92 chunks (fixed: 44). Everything else as the Exp 0 baseline, including the not-found threshold 0.605 (not recalibrated).
+- Percentile chosen on `eval/calibration.jsonl` only (`python -m scripts.calibrate_chunking`, 15 answerable questions, gold = page). Selection rule: highest Recall@3, then highest MRR.
+
+| Calibration | Chunks | R@1 | R@3 | R@5 | MRR | Answerable below 0.605 | Unanswerable at/above 0.605 |
+|---|---|---|---|---|---|---|---|
+| fixed (reference) | 44 | 0.8000 | 1.0000 | 1.0000 | 0.8889 | 2 | 1 |
+| semantic p5 | 68 | 0.6667 | 0.9333 | 0.9333 | 0.8095 | 2 | 2 |
+| **semantic p10** | 92 | 0.8667 | 0.9333 | 0.9333 | 0.9048 | 1 | 2 |
+| semantic p15 | 116 | 0.8000 | 0.9333 | 0.9333 | 0.8597 | 1 | 2 |
+| semantic p25 | 163 | 0.8667 | 0.8667 | 0.8667 | 0.8767 | 1 | 2 |
+| semantic p35 | 211 | 0.8667 | 0.9333 | 0.9333 | 0.9000 | 0 | 2 |
+| semantic p50 | 282 | 0.7333 | 0.9333 | 1.0000 | 0.8467 | 0 | 2 |
+| semantic p65 | 353 | 0.8000 | 0.9333 | 0.9333 | 0.8595 | 0 | 3 |
+| semantic p80 | 424 | 0.7333 | 0.8667 | 0.8667 | 0.8044 | 0 | 4 |
+
+No semantic setting reached the fixed strategy's calibration Recall@3.
+
+| Metric (eval/questions.jsonl) | Baseline (Exp 0) | Exp 1 |
+|--------|------|------|
+| Recall@1 | 0.6333 | 0.7667 |
+| Recall@3 | 0.9667 | 0.9667 |
+| Recall@5 | 1.0000 | 1.0000 |
+| MRR | 0.8028 | 0.8694 |
+| Hallucination (of 10) | 0.10 (q32) | **0.20 (q32, q37)** |
+| Answerable wrongly refused (of 30) | 4 (q03, q11, q13, q30) | 2 (q03, q13) |
+
+Decision: **discarded**: hallucination rose (q37, PostgreSQL replication, answered from general knowledge with a citation). Retrieval improved (Recall@1 +0.13, MRR +0.07) and two fewer answerable questions were refused, but the keep rule does not allow a hallucination increase. q37 also flipped between runs in Exp 0 before chunk IDs were made stable, so this is one question near the threshold, not a clear effect. The threshold was not recalibrated for the smaller chunks, which shift top vector scores (calibration: unanswerable at/above threshold 1 → 2).
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.7667, "recall_at_3": 0.9667, "recall_at_5": 1.0, "mrr": 0.8694,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 2}
+```
+
+Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
