@@ -122,3 +122,28 @@ Cause: **Ollama's prompt cache**, not sampling, retrieval or the threshold.
 - With the model unloaded first (`keep_alive: 0`), q37's prompt was computed from token 0 in 512-token batches and gave the same 528-token answer twice.
 
 Fix (eval only, on `exp/temperature-zero`): `scripts/eval.py` unloads the answer model before the first question (`src.answer.unload_model`, a `keep_alive: 0` request to the local Ollama), so each run starts from an empty prompt cache and sends the same sequence of requests. `--warm-model` skips it. The app is unchanged. A five-run confirmation of the fixed eval was started and stopped before any run finished, so reproducibility of full runs with the fix is not yet measured. Exp 1–3 decisions were not re-checked.
+
+### Exp 4: semantic cache (kept)
+
+- Branch: `exp/semantic-cache` (from `exp/temperature-zero` before the follow-up eval fix)
+- Settings: `[cache] semantic = true`, `semantic_threshold = 0.972`. Exact match stays the first check. Only on an exact miss, the question is embedded (nomic-embed-text, `search_query:` prefix) and compared by cosine with cached question embeddings for the **same document set** (new `doc_set_key` column: hash of the sorted document IDs and their sha256 hashes). The closest entry is served only if its similarity is ≥ 0.972. Unchanged rules: refusals are never stored, follow-ups with conversation history never use the cache, and deleting a document deletes every entry that used it (semantic entries included; unit-tested). `/ask` now also returns `cache_match` (`"exact"`, `"semantic"` or null).
+- Test pairs: `eval/cache_pairs.jsonl`, 20 paraphrase pairs and 20 near-miss pairs written from the eval PDF.
+- Threshold chosen on those pairs only (`python -m scripts.calibrate_cache`), with a rule fixed in advance: simulate a cache holding every `question_a`; for each `question_b` take the closest cached question; the threshold is the lowest value with zero near-miss false hits (a near-miss counts as a false hit if it matches *any* cached question) plus a 0.005 margin, rounded up. Closest near-miss similarity 0.9661 (n08: "throw" vs "throws") → threshold 0.972. Three near-misses were closest to a *different* pair's question (n11 → p05 at 0.9055, n07 → p07, n14 → p04).
+
+The two groups overlap: paraphrase similarities range 0.7895–0.9855 and near-miss similarities 0.7346–0.9661. 15 of 20 paraphrases score below the most similar near-miss, so a threshold with zero near-miss false hits can only catch the closest paraphrases.
+
+| Measurement | Result |
+|---|---|
+| Calibration (similarities only): paraphrase hits at 0.972 | 4 / 20 (p20, p09, p03, p12) |
+| Calibration: near-miss false hits at 0.972 | 0 / 20 |
+| End to end via `POST /ask` (`python -m scripts.measure_cache`): paraphrase hit rate | **3 / 20** (p09, p12, p20); 3 / 17 counting only pairs whose `question_a` was answered (p03, p06, p08 were refused, so not cached) |
+| End to end: near-miss false-hit rate | **0 / 20** (18 of the 20 `question_a` were cached; n10, n13 refused) |
+| Semantic-hit latency (3 questions × 5 asks) | p50 0.246 s, p95 0.27 s |
+| Exact-hit latency (35 asks) | p50 0.111 s, p95 0.15 s |
+| Cache miss, answer generated (37 asks) | p50 5.3 s |
+
+Caveats: the threshold was chosen on the same 40 pairs it is reported on, so zero false hits on new near-misses is not guaranteed, and the margin above the closest near-miss is only 0.006. The semantic hit p95 comes from 15 samples on 3 questions.
+
+Keep rule: the eval (`scripts/eval.py`) does not use the answer cache, so Recall@3, MRR, hallucination and wrongly refused are unchanged by construction (the eval was not re-run). Near-miss false-hit rate is 0 / 20 and the paraphrase hit rate is reported. Decision: **kept**.
+
+Checks: pytest 89 passed; offline check (online audit) 8 passed, 0 failed (exact repeat still served from cache, 0.14 s); deletion check 15 passed, 0 failed.

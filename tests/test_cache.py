@@ -143,3 +143,93 @@ def test_disabled_cache_is_skipped(client, monkeypatch):
 
 def test_config_enables_cache():
     assert cache.is_enabled(api.ROOT / "config.toml") is True
+
+
+# --- Semantic lookup (second check after an exact miss) -------------------------------
+# The conftest fake embedding is bag-of-words, so a reordering of the same words is a
+# near-identical vector and a question with different words is not.
+
+
+@pytest.fixture
+def semantic_on(monkeypatch):
+    monkeypatch.setattr(cache, "semantic_settings", lambda _: (True, 0.95))
+
+
+def test_semantic_hit_after_exact_miss(client, semantic_on):
+    doc_ids = _upload(client, "alpha")
+    first = _ask(client, "What is the fact?", doc_ids)
+    exact = _ask(client, "what is the fact?", doc_ids)
+    similar = _ask(client, "The fact is what?", doc_ids)
+
+    assert first["cached"] is False and first["cache_match"] is None
+    assert exact["cached"] is True and exact["cache_match"] == "exact"
+    assert similar["cached"] is True and similar["cache_match"] == "semantic"
+    assert similar["answer"] == first["answer"]
+    assert client.calls["generate"] == 1
+
+
+def test_semantic_miss_below_threshold(client, semantic_on):
+    doc_ids = _upload(client, "alpha")
+    _ask(client, "What is the fact?", doc_ids)
+    other = _ask(client, "Which colour is the sky?", doc_ids)
+    assert other["cached"] is False
+    assert client.calls["generate"] == 2
+
+
+def test_semantic_lookup_only_within_same_document_set(client, semantic_on):
+    alpha, beta = _upload(client, "alpha", "beta")
+    _ask(client, "What is the fact?", [alpha])
+    other_docs = _ask(client, "The fact is what?", [alpha, beta])
+    assert other_docs["cached"] is False
+    assert client.calls["generate"] == 2
+
+
+def test_semantic_never_serves_refusals(client, semantic_on, monkeypatch):
+    doc_ids = _upload(client, "alpha")
+    monkeypatch.setattr(api, "generate_answer", lambda *args, **kwargs: REFUSAL)
+    _ask(client, "What is the capital of Mars?", doc_ids)
+    again = _ask(client, "The capital of Mars is what?", doc_ids)
+    assert again["cached"] is False
+    assert _cache_rows(client) == []
+
+
+def test_semantic_skipped_for_follow_ups(client, semantic_on):
+    doc_ids = _upload(client, "alpha")
+    first = _ask(client, "What is the fact?", doc_ids)
+    response = client.post(
+        "/ask",
+        json={"question": "The fact is what?", "doc_ids": doc_ids, "conversation_id": first["conversation_id"]},
+    )
+    assert response.json()["cached"] is False
+    assert client.calls["generate"] == 2
+
+
+def test_deleting_document_removes_semantic_entries(client, semantic_on):
+    alpha, beta = _upload(client, "alpha", "beta")
+    _ask(client, "What is the fact?", [alpha])
+    assert client.delete(f"/documents/{alpha}").status_code == 200
+    assert _cache_rows(client) == []
+    with psycopg.connect(client.database_url) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM answer_cache WHERE question_embedding IS NOT NULL"
+        ).fetchone()[0] == 0
+
+
+def test_semantic_stores_question_embedding_and_doc_set(client, semantic_on):
+    doc_ids = _upload(client, "alpha")
+    _ask(client, "What is the fact?", doc_ids)
+    with psycopg.connect(client.database_url) as connection:
+        row = connection.execute("SELECT doc_set_key, question_embedding FROM answer_cache").fetchone()
+    assert row[0] and row[1] is not None
+
+
+def test_config_semantic_threshold_is_calibrated():
+    enabled, threshold = cache.semantic_settings("config.toml")
+    assert enabled is True
+    assert threshold == 0.972
+
+
+def test_choose_threshold_rule():
+    from scripts.calibrate_cache import choose_threshold
+
+    assert choose_threshold([0.80, 0.9661]) == 0.972
