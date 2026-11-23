@@ -137,6 +137,42 @@ def _question_embedding(question: str) -> list[float] | None:
         return None
 
 
+def _retrieval_engine() -> str:
+    """``custom`` (src.index + src.fuse) or ``langchain`` (src/lc_retrieve.py)."""
+    with open(CONFIG_PATH, "rb") as config_file:
+        engine = tomllib.load(config_file).get("retrieval", {}).get("engine", "custom")
+    if engine not in {"custom", "langchain"}:
+        raise ValueError(f"[retrieval] engine must be 'custom' or 'langchain', not {engine!r}")
+    return engine
+
+
+def _langchain_ranking(
+    query: str,
+    index: dict[str, Any],
+    doc_ids: list[str],
+    top_n: int,
+    *,
+    fallback: list[str],
+) -> tuple[list[str], float | None]:
+    """Hybrid ranking through LangChain; keyword ranking ``fallback`` if it fails."""
+    try:
+        from src.lc_retrieve import LangChainHybrid
+
+        selected = set(doc_ids)
+        engine = LangChainHybrid(
+            [chunk for chunk in index["chunks"] if chunk["doc_id"] in selected],
+            doc_ids,
+            top_n=top_n,
+            rrf_k=get_rrf_k(CONFIG_PATH),
+            config_path=CONFIG_PATH,
+        )
+        chunks, top_score = engine.retrieve(query)
+        return [chunk["chunk_id"] for chunk in chunks], top_score
+    except Exception as exc:
+        logger.warning("LangChain retrieval unavailable; using keyword search only: %s", exc)
+        return fallback, None
+
+
 def _get_bm25_index() -> dict[str, Any]:
     global _bm25_index
     if _bm25_index is None:
@@ -332,7 +368,11 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
     # Hybrid: fuse the keyword and vector rankings with RRF. The best vector score
     # feeds the calibrated "not found" threshold in generate_answer.
     top_vector_score: float | None = None
-    if _retrieval_method() == "hybrid":
+    if _retrieval_method() == "hybrid" and _retrieval_engine() == "langchain":
+        ranked_ids, top_vector_score = _langchain_ranking(
+            retrieval_query, index, selected_ids, top_n, fallback=ranked_ids
+        )
+    elif _retrieval_method() == "hybrid":
         vector_results = _vector_ranking(retrieval_query, selected_ids, top_n)
         if vector_results:
             top_vector_score = vector_results[0][1]

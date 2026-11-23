@@ -181,3 +181,31 @@ Decision: **discarded by the keep rule** because hallucination rose 0.10 → 0.2
 ```
 
 Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
+
+### Exp 2: LangChain retrieval (discarded)
+
+- Branch: `exp/langchain-retrieval` (from `exp/temperature-zero`)
+- Settings: `[retrieval] engine = "langchain"` for the run (committed default `"custom"`). `src/lc_retrieve.py`: `BM25Retriever` (langchain-community 0.4.2, rank-bm25 0.2.2) with the project tokenizer (`src.index._tokenize`), k = 20; `PgVectorRetriever`, a `BaseRetriever` that embeds the query with nomic-embed-text and calls `db.vector_search`, k = 20; fused by `EnsembleRetriever` (langchain-classic 1.1.0, langchain-core 1.8.4) with weights [0.5, 0.5], c = 60, `id_key = "chunk_id"`. `/ask` uses the same switch.
+- Eval: `python scripts/eval.py --retriever langchain --with-answers` loads the eval chunks and their embeddings into a throwaway PostgreSQL schema (dropped afterwards; verified no `eval_*` schema was left), so `db.vector_search` serves the vectors. Both engines ran on the same chunks (fixed chunking with stable IDs, 44 chunks) in this branch.
+- Fusion difference: `EnsembleRetriever` uses **weighted** RRF, score(d) = Σ wᵢ / (c + rankᵢ(d)). With equal weights and c = 60 that is half our RRF (k = 60) and gives the same order for the same input lists (unit-tested). The lists themselves differ: `rank_bm25.BM25Okapi` uses a different IDF (epsilon floor) and returns the top k even at score 0, while our BM25 drops zero-score chunks.
+
+| Metric | Baseline (Exp 0) | Custom engine (rerun here) | LangChain engine |
+|--------|------|------|------|
+| Recall@1 | 0.6333 | 0.6333 | 0.6333 |
+| Recall@3 | 0.9667 | 0.9667 | 1.0000 |
+| Recall@5 | 1.0000 | 1.0000 | 1.0000 |
+| MRR | 0.8028 | 0.8028 | 0.8056 |
+| Hallucination (of 10) | 0.10 (q32) | 0.10 (q32) | **0.20 (q32, q37)** |
+| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) | 4 (same) |
+
+The only retrieval difference is q14 (gold rank 4 → 3). q37 (PostgreSQL replication) has the same top vector score in both engines and passes the 0.605 threshold either way; with the LangChain ordering of the top 4 chunks mistral answered from general knowledge instead of refusing.
+
+Decision: **discarded**: hallucination rose (0.10 → 0.20). Retrieval gained slightly (Recall@3 +0.033, MRR +0.003), on one question.
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.6333, "recall_at_3": 1.0, "recall_at_5": 1.0, "mrr": 0.8056,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 4}
+```
+
+Checks: pytest 86 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.

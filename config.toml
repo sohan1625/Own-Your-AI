@@ -10,6 +10,7 @@ overlap = 50           # tokens (default: 50, tuned on EVAL.md)
 
 [retrieval]
 method = "hybrid"           # "hybrid" (BM25 + vector, fused with RRF) or "keyword" (BM25 only)
+engine = "custom"           # hybrid only: "custom" (src.index + src.fuse) or "langchain" (src/lc_retrieve.py: BM25Retriever + pgvector, EnsembleRetriever)
 top_n_per_retriever = 20    # default: 20 (candidates each for BM25 and vector search)
 
 [fusion]

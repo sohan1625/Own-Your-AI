@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
@@ -152,8 +153,90 @@ def run_evaluation(
     starts with an empty Ollama prompt cache (see ``src.answer.unload_model``). The
     command line turns it on by default.
     """
-    if retriever not in ("keyword", "vector", "hybrid"):
-        raise ValueError(f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', or 'hybrid'.")
+    if retriever not in ("keyword", "vector", "hybrid", "langchain"):
+        raise ValueError(
+            f"Unknown retriever: {retriever}. Expected 'keyword', 'vector', 'hybrid', or 'langchain'."
+        )
+    if retriever == "langchain":
+        with langchain_store(chunks, vectors, config_path=config_path) as (lc_chunks, lc_vectors, doc_ids):
+            return _run_evaluation(
+                questions_path, output_path, with_answers, config_path, None, retriever,
+                lc_chunks, lc_vectors, doc_ids, cold_start,
+            )
+    return _run_evaluation(
+        questions_path, output_path, with_answers, config_path, bm25_index, retriever, chunks, vectors, None,
+        cold_start,
+    )
+
+
+@contextmanager
+def langchain_store(
+    chunks: Optional[List[Dict[str, Any]]],
+    vectors: Optional[List[List[float]]],
+    *,
+    config_path: str | Path = "config.toml",
+):
+    """Load the eval chunks and embeddings into a throwaway PostgreSQL schema.
+
+    The LangChain engine reads vectors through ``db.vector_search``, so the chunks
+    must be in the database. The schema is dropped afterwards; the main schema is
+    never touched.
+    """
+    import os
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    from src import db
+
+    if chunks is None:
+        chunks = assign_stable_chunk_ids(chunk_page_records(parse_folder(config_path=config_path), config_path=config_path))
+    if vectors is None:
+        vectors = build_chunk_embeddings(chunks, config_path=config_path)
+    base_url = os.environ["DATABASE_URL"]
+    schema = f"eval_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(base_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    os.environ["DATABASE_URL"] = make_conninfo(base_url, options=f"-c search_path={schema}")
+    try:
+        db.initialize_database()
+        doc_ids: List[str] = []
+        by_file: Dict[str, List[int]] = defaultdict(list)
+        for i, chunk in enumerate(chunks):
+            by_file[chunk["file"]].append(i)
+        for file_name, indexes in by_file.items():
+            doc_id = str(uuid.uuid5(_CHUNK_ID_NAMESPACE, f"doc|{Path(file_name).name}"))
+            db.insert_document(
+                {
+                    "id": doc_id,
+                    "filename": Path(file_name).name,
+                    "sha256": chunks[indexes[0]].get("file_hash") or doc_id,
+                    "pages": len({chunks[i]["page"] for i in indexes}),
+                },
+                [chunks[i] for i in indexes],
+                [vectors[i] for i in indexes],
+            )
+            doc_ids.append(doc_id)
+        yield chunks, vectors, doc_ids
+    finally:
+        os.environ["DATABASE_URL"] = base_url
+        with psycopg.connect(base_url, autocommit=True) as connection:
+            connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def _run_evaluation(
+    questions_path: str | Path,
+    output_path: Optional[str | Path],
+    with_answers: bool,
+    config_path: str | Path,
+    bm25_index: Optional[Dict[str, Any]],
+    retriever: str,
+    chunks: Optional[List[Dict[str, Any]]],
+    vectors: Optional[List[List[float]]],
+    doc_ids: Optional[List[str]],
+    cold_start: bool = False,
+) -> Dict[str, Any]:
 
     if output_path is None:
         output_path = f"eval/results_{retriever}.json"
@@ -182,6 +265,11 @@ def run_evaluation(
     rrf_k = get_rrf_k(config_path)
     retrieval_params = get_retrieval_params(config_path)
     top_n = retrieval_params["top_n"]
+    lc_engine = None
+    if retriever == "langchain":
+        from src.lc_retrieve import LangChainHybrid
+
+        lc_engine = LangChainHybrid(chunks, doc_ids or [], top_n=top_n, rrf_k=rrf_k, config_path=config_path)
 
     if with_answers and cold_start:
         unload_model(config_path)
@@ -222,6 +310,8 @@ def run_evaluation(
             vector_results = vector_retrieve(q_text, chunks, vectors, top_n=top_n, config_path=config_path)
             vector_chunks = [chunk for chunk, _ in vector_results]
             retrieved = reciprocal_rank_fusion([bm25_chunks, vector_chunks], k=rrf_k, top_n=top_n)
+        elif retriever == "langchain":
+            retrieved, lc_top_vector_score = lc_engine.retrieve(q_text)
 
         first_gold_rank = evaluate_retrieval_match(retrieved, gold_passages)
 
@@ -239,7 +329,9 @@ def run_evaluation(
             top_k = get_generation_top_k(config_path=config_path)
             gen_chunks = retrieved[:top_k]
             top_vector_score: Optional[float] = None
-            if retriever == "hybrid" and vector_results:
+            if retriever == "langchain":
+                top_vector_score = lc_top_vector_score
+            elif retriever == "hybrid" and vector_results:
                 top_vector_score = vector_results[0][1]
             elif retriever == "vector" and scored_chunks:
                 top_vector_score = scored_chunks[0][1]
@@ -409,9 +501,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run evaluation on questions.jsonl.")
     parser.add_argument(
         "--retriever",
-        choices=["keyword", "vector", "hybrid"],
+        choices=["keyword", "vector", "hybrid", "langchain"],
         default="keyword",
-        help="Retrieval strategy: keyword (default), vector, or hybrid.",
+        help="Retrieval strategy: keyword (default), vector, hybrid, or langchain (hybrid via LangChain).",
     )
     parser.add_argument(
         "--with-answers",
