@@ -147,3 +147,37 @@ Caveats: the threshold was chosen on the same 40 pairs it is reported on, so zer
 Keep rule: the eval (`scripts/eval.py`) does not use the answer cache, so Recall@3, MRR, hallucination and wrongly refused are unchanged by construction (the eval was not re-run). Near-miss false-hit rate is 0 / 20 and the paraphrase hit rate is reported. Decision: **kept**.
 
 Checks: pytest 89 passed; offline check (online audit) 8 passed, 0 failed (exact repeat still served from cache, 0.14 s); deletion check 15 passed, 0 failed.
+
+### Exp 3: faithfulness check (discarded by the keep rule; see note)
+
+- Branch: `exp/faithfulness` (from `exp/temperature-zero`)
+- Settings: Exp 0 baseline unchanged. New `src/faithfulness.py`, called from `scripts/eval.py` on every non-refusal answer; it never changes the answer text. Each answer sentence is scored against the chunk it cites (its own `[id]`; if it has none, the next citation in the answer, else the previous one). Score = share of the sentence's content words (lower-cased, stopwords removed, trailing plural "s" stripped) found in the cited chunk text. Supported when score ≥ 0.5, a threshold fixed before the run and not tuned.
+
+| Metric | Baseline (Exp 0) | Exp 3 |
+|--------|------|------|
+| Recall@1 | 0.6333 | 0.6333 |
+| Recall@3 | 0.9667 | 0.9667 |
+| Recall@5 | 1.0000 | 1.0000 |
+| MRR | 0.8028 | 0.8028 |
+| Hallucination (of 10) | 0.10 (q32) | **0.20 (q32, q37)** |
+| Answerable wrongly refused (of 30) | 4 | 4 (q03, q11, q13, q30) |
+| Faithfulness, all non-refusal answers | not measured | 62 / 95 sentences supported (0.6526); 21 of 28 answers fully supported |
+| Faithfulness, answerable questions only | not measured | 47 / 56 sentences (0.8393); 21 of 26 answers fully supported |
+| Faithfulness, the 2 hallucinated answers | not measured | 15 / 39 sentences (0.3846); 0 of 2 fully supported |
+
+Unsupported answerable sentences: q12, q16, q25 (2), q27, q29 (4). q25 shows the check's main use: the text matches the PDF, but the citation points at the page-41 chunk (daemon code example) while the definition is in another chunk, so the citation is wrong even though the answer is right. q29 shows a false negative: a correct paraphrase of the Statement vs PreparedStatement table scores 0.29–0.43.
+
+Limits of the check (lexical overlap, not entailment): paraphrases score low (false "unsupported"); a flipped negation, swapped number, or wrong relation between copied words still scores high (false "supported"; unit-tested as a known limit); when mistral writes no citation the app attaches the top chunk's ID, so the check scores against that fallback chunk; very short sentences swing between 0 and 1; markdown/code lines in long answers (q37) are each counted as sentences.
+
+Decision: **discarded by the keep rule** because hallucination rose 0.10 → 0.20. **Note:** this experiment does not touch retrieval, the prompt, or generation; the answer path is identical to the baseline. q37 changed from a refusal to a hallucination on identical code and settings, so the rise is run-to-run generation noise, not an effect of this change. Across the runs of the baseline configuration in this session (temperature 0), q37 hallucinated in 2 of 5 (once in the random-ID pair, and here), and q37 is also the only question that moved hallucination in Exp 1 and Exp 2. The faithfulness metric itself is measurement-only and could be adopted separately.
+
+```
+{"total_questions": 40, "answerable_questions": 30, "unanswerable_questions": 10,
+ "recall_at_1": 0.6333, "recall_at_3": 0.9667, "recall_at_5": 1.0, "mrr": 0.8028,
+ "hallucination_rate": 0.2, "answerable_wrongly_refused": 4,
+ "faithfulness_answers_checked": 28, "faithfulness_answers_fully_supported": 21,
+ "faithfulness_sentences_scored": 95, "faithfulness_sentences_supported": 62,
+ "faithfulness_sentences_uncited": 0, "faithfulness_sentence_rate": 0.6526}
+```
+
+Checks: pytest 88 passed; offline check (online audit) 8 passed, 0 failed; deletion check 15 passed, 0 failed.
