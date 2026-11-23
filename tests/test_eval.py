@@ -135,6 +135,18 @@ class TestEvalHarness(unittest.TestCase):
         summary = results["summary"]
         # fx03 did not hallucinate (returned not found in your documents)
         self.assertEqual(summary["hallucination_rate"], 0.0)
+        # fx02 is answerable but was refused
+        self.assertEqual(summary["answerable_wrongly_refused"], 1)
+        flags = {q["id"]: q["wrongly_refused"] for q in results["questions"]}
+        self.assertEqual(flags, {"fx01": False, "fx02": True, "fx03": None})
+
+    def test_assign_stable_chunk_ids_is_repeatable_and_unique(self):
+        from scripts.eval import assign_stable_chunk_ids
+        import copy
+        first = assign_stable_chunk_ids(copy.deepcopy(self.synthetic_chunks))
+        second = assign_stable_chunk_ids(copy.deepcopy(self.synthetic_chunks))
+        self.assertEqual([c["chunk_id"] for c in first], [c["chunk_id"] for c in second])
+        self.assertEqual(len({c["chunk_id"] for c in first}), len(first))
 
     def test_reciprocal_rank_fusion(self):
         """Test RRF scoring and combination across ranked lists."""

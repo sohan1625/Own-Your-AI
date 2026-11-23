@@ -96,6 +96,16 @@ def get_generation_top_k(config_path: str | Path = "config.toml") -> int:
         return 1
 
 
+def get_generation_temperature(config_path: str | Path = "config.toml") -> float | None:
+    """Read ``temperature`` from ``[generation]``; ``None`` when unset (Ollama default)."""
+    try:
+        cfg = _load_config(config_path)
+    except Exception:
+        return None
+    value = cfg.get("generation", {}).get("temperature")
+    return None if value is None else float(value)
+
+
 def is_below_threshold(top_vector_score: float, config_path: str | Path = "config.toml") -> bool:
     """Read not_found_threshold from [thresholds] and return True if top_vector_score < threshold."""
     try:
@@ -218,7 +228,11 @@ def generate_answer(
         chunks_to_use,
         conversation_history=conversation_history,
     )
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    body: dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+    temperature = get_generation_temperature(config_path)
+    if temperature is not None:
+        body["options"] = {"temperature": temperature}
+    payload = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(f"{host}/api/generate", data=payload, method="POST")
     request.add_header("Content-Type", "application/json")
     try:

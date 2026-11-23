@@ -15,6 +15,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import sys
+import uuid
 from typing import Any, Dict, List, Optional
 
 # Ensure project root is on sys.path
@@ -118,6 +119,21 @@ def reciprocal_rank_fusion(
     return [chunk_map[k_val] for k_val in sorted_keys[:top_n]]
 
 
+_CHUNK_ID_NAMESPACE = uuid.UUID("6f1c2a3e-6b0e-4f1e-9d55-0c7e4a1b2c3d")
+
+
+def assign_stable_chunk_ids(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Replace random chunk IDs with IDs derived from file, page and character span.
+
+    Chunk IDs appear in the prompt, so random IDs make every run send a different
+    prompt and the answers cannot repeat even at temperature 0.
+    """
+    for chunk in chunks:
+        key = f"{Path(chunk.get('file', '')).name}|{chunk.get('page')}|{chunk.get('start_char')}|{chunk.get('end_char')}"
+        chunk["chunk_id"] = str(uuid.uuid5(_CHUNK_ID_NAMESPACE, key))
+    return chunks
+
+
 def run_evaluation(
     questions_path: str | Path = "eval/questions.jsonl",
     output_path: Optional[str | Path] = None,
@@ -143,7 +159,7 @@ def run_evaluation(
             chunks = bm25_index["chunks"]
         else:
             records = parse_folder(config_path=config_path)
-            chunks = chunk_page_records(records, config_path=config_path)
+            chunks = assign_stable_chunk_ids(chunk_page_records(records, config_path=config_path))
 
     # BM25 index built once if needed
     if bm25_index is None and retriever in ("keyword", "hybrid"):
@@ -168,6 +184,7 @@ def run_evaluation(
     hits_at_5 = 0
     sum_reciprocal_rank = 0.0
     hallucination_count = 0
+    wrongly_refused_count = 0
 
     for q in questions:
         qid = q.get("id", "unknown")
@@ -200,6 +217,7 @@ def run_evaluation(
 
         generated_answer: Optional[str] = None
         hallucinated: Optional[bool] = None
+        wrongly_refused: Optional[bool] = False if (with_answers and answerable) else None
 
         if with_answers:
             top_k = get_generation_top_k(config_path=config_path)
@@ -242,6 +260,9 @@ def run_evaluation(
                 hallucinated = bool("not found in your documents" not in ans_text.lower())
                 if hallucinated:
                     hallucination_count += 1
+            elif ans_text.strip().rstrip(".").strip().lower() == "not found in your documents":
+                wrongly_refused = True
+                wrongly_refused_count += 1
 
         if answerable:
             answerable_count += 1
@@ -272,6 +293,7 @@ def run_evaluation(
             "status": status,
             "generated_answer": generated_answer,
             "hallucinated": hallucinated,
+            "wrongly_refused": wrongly_refused,
         })
 
     recall_1 = (hits_at_1 / answerable_count) if answerable_count else 0.0
@@ -292,6 +314,8 @@ def run_evaluation(
         "recall_at_5": round(recall_5, 4),
         "mrr": round(mrr, 4),
         "hallucination_rate": round(hallucination_rate, 4) if hallucination_rate is not None else None,
+        # Answerable questions answered with the refusal (threshold or model).
+        "answerable_wrongly_refused": wrongly_refused_count if with_answers else None,
     }
 
     full_output = {
@@ -336,6 +360,8 @@ def print_results_table(eval_data: Dict[str, Any]) -> None:
         print(f"  Hallucination Rate:     {summary['hallucination_rate']:.4f}")
     else:
         print("  Hallucination Rate:     N/A (retrieval-only mode; use --with-answers to evaluate)")
+    if summary.get('answerable_wrongly_refused') is not None:
+        print(f"  Answerable refused:     {summary['answerable_wrongly_refused']}")
     print()
 
 

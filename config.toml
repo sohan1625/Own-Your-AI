@@ -33,6 +33,7 @@ search_document_prefix = "search_document: "
 
 [generation]
 top_k = 4
+temperature = 0           # greedy decoding, so repeated eval runs give the same answers
 
 
 [ollama]
