@@ -271,7 +271,9 @@ async def _index_upload(file: UploadFile) -> dict[str, Any]:
 
 @app.get("/", include_in_schema=False)
 def home() -> FileResponse:
-    return FileResponse(STATIC_INDEX, media_type="text/html")
+    # no-cache: the browser re-checks the page on every load, so UI updates show up
+    # without a hard refresh (unchanged pages still come back as 304 Not Modified).
+    return FileResponse(STATIC_INDEX, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/upload")

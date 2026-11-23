@@ -184,7 +184,7 @@
 
     .document-row {
       display: grid;
-      grid-template-columns: 18px minmax(0, 1fr) 28px;
+      grid-template-columns: 18px minmax(0, 1fr) minmax(28px, auto);
       align-items: center;
       gap: 8px;
       padding: 5px 4px 5px 8px;
@@ -212,6 +212,16 @@
 
     .delete-document .icon { width: 15px; height: 15px; }
     .delete-document:hover { color: var(--danger); background: rgba(240, 145, 145, .10); }
+    /* Second step of the in-page confirmation: the icon becomes a "Delete?" button. */
+    .delete-document.confirming {
+      width: auto;
+      padding: 0 8px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--danger);
+      background: rgba(240, 145, 145, .16);
+    }
 
     .conversation-button {
       width: 100%;
@@ -808,8 +818,29 @@
           deleteButton.innerHTML = TRASH_ICON;
           deleteButton.setAttribute("aria-label", `Delete ${item.filename}`);
           deleteButton.title = "Delete document";
+          // Two clicks instead of the browser's confirm dialog: some embedded browsers
+          // never show native dialogs (it returns false at once), so delete did nothing.
+          let confirmTimer = null;
+          const resetDeleteButton = () => {
+            clearTimeout(confirmTimer);
+            confirmTimer = null;
+            deleteButton.classList.remove("confirming");
+            deleteButton.innerHTML = TRASH_ICON;
+            deleteButton.title = "Delete document";
+            deleteButton.setAttribute("aria-label", `Delete ${item.filename}`);
+          };
+          deleteButton.addEventListener("blur", () => { if (confirmTimer) resetDeleteButton(); });
           deleteButton.addEventListener("click", async () => {
-            if (!window.confirm(`Delete ${item.filename}? This removes it and its cached answers.`)) return;
+            if (!confirmTimer) {
+              deleteButton.classList.add("confirming");
+              deleteButton.textContent = "Delete?";
+              deleteButton.title = `Click again to delete ${item.filename} and its cached answers`;
+              deleteButton.setAttribute("aria-label", `Confirm: delete ${item.filename}`);
+              confirmTimer = setTimeout(resetDeleteButton, 6000);
+              return;
+            }
+            clearTimeout(confirmTimer);
+            deleteButton.textContent = "Deleting…";
             deleteButton.disabled = true;
             try {
               const deleteResponse = await fetch(`/documents/${encodeURIComponent(item.id)}`, {
@@ -820,6 +851,7 @@
             } catch (error) {
               addSystemNote(error instanceof Error ? error.message : "The document could not be deleted.");
               deleteButton.disabled = false;
+              resetDeleteButton();
             }
           });
 

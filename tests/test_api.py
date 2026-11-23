@@ -297,3 +297,16 @@ def test_followup_search_is_not_buried_by_previous_answer(monkeypatch):
     )
 
     assert "firewall" in captured["chunk_ids"]
+
+
+def test_home_page_is_revalidated_and_uses_no_native_dialogs():
+    # Without "with", TestClient skips the lifespan, so no database is needed.
+    response = TestClient(api.app).get("/")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+    # Embedded browsers may never show native dialogs; confirm() then returns false at
+    # once and the delete button did nothing. Deletion uses an in-page second click.
+    page = response.text
+    for call in ("confirm(", "alert(", "prompt("):
+        assert call not in page
+    assert 'deleteButton.textContent = "Delete?"' in page
