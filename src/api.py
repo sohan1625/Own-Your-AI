@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 
 from src import cache, db
-from src.answer import generate_answer, get_generation_top_k
+from src.answer import generate_answer, get_generation_top_k, needs_conversation_history
 from src.chunk import chunk_page_records
 from src.cite import resolve_citations
 from src.fuse import get_rrf_k, reciprocal_rank_fusion
@@ -401,7 +401,9 @@ def ask_question(request: AskRequest) -> dict[str, Any]:
         question,
         generation_chunks,
         top_score=top_vector_score,
-        conversation_history=conversation_history,
+        # Only questions that refer back get the previous exchange in the prompt;
+        # otherwise the model tends to repeat its earlier answer.
+        conversation_history=conversation_history if needs_conversation_history(question) else None,
         config_path=ROOT / "config.toml",
     )
     citation_result = resolve_citations(answer, generation_chunks)
